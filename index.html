@@ -289,12 +289,15 @@ const gravity = -30, PLAYER_SPEED_WALK = 27;
 let MAP_SIZE = 1125;
 const PLAYER_HEIGHT_STAND = 7.8, PLAYER_HEIGHT_CROUCH = 3.9;
 
-let headBobTimer = 0; // متغیر مربوط به انیمیشن بالا پایین شدن دوربین
-
 let currentWeapon = 'pistol', akUnlocked = false, sniperUnlocked = false;
 let autoFireInterval = null, isZoomed = false, userGraphicsQuality = 'high';
 let localWeaponMesh = null, muzzleLight = null;
+
+// مدیریت شبکه چت صوتی شبکه Mesh
 let localAudioStream = null, isVoiceEnabled = false, remoteAudioElements = {};
+let allRoomPeers = new Set();
+let activeVoiceCalls = {};
+
 let currentAmmo = 12, maxAmmo = 12, isReloading = false;
 let crosshairStyleIndex = 0, lastFireTime = 0, lastPosSendTime = 0;
 
@@ -416,7 +419,7 @@ function createDetailedPlayerModel() {
     group.add(rightLeg);
 
     group.scale.set(1.3, 1.3, 1.3);
-    group.userData = { leftLeg, rightLeg, leftArm, rightArm };
+    group.userData = { leftLeg, rightLeg };
     return group;
 }
 
@@ -570,13 +573,17 @@ function createRoom() {
     isHost = true; document.getElementById('menu-status').innerText = 'در حال ساخت...';
     peer = new Peer(Math.floor(1000 + Math.random() * 9000).toString(), peerConfig);
     peer.on('open', id => {
-        myId = id; document.getElementById('main-menu').style.display = 'none';
+        myId = id; 
+        allRoomPeers.add(myId);
+        document.getElementById('main-menu').style.display = 'none';
         document.getElementById('host-wait-menu').style.display = 'flex';
         document.getElementById('my-room-code').innerText = id;
     });
     peer.on('call', handleVoiceCall);
     peer.on('connection', conn => {
-        connections[conn.peer] = conn; setupConnEvents(conn);
+        connections[conn.peer] = conn; 
+        allRoomPeers.add(conn.peer);
+        setupConnEvents(conn);
         document.getElementById('host-status').innerText = `بازیکنان متصل: ${Object.keys(connections).length + 1} / ۵۰`;
         document.getElementById('start-game-btn').style.display = 'block';
     });
@@ -587,7 +594,9 @@ function joinRoom() {
     if (!code) return; document.getElementById('menu-status').innerText = 'درحال اتصال...';
     peer = new Peer(undefined, peerConfig);
     peer.on('open', id => {
-        myId = id; let conn = peer.connect(code); connections[code] = conn; setupConnEvents(conn);
+        myId = id; 
+        allRoomPeers.add(myId);
+        let conn = peer.connect(code); connections[code] = conn; setupConnEvents(conn);
         conn.on('open', () => {
             document.getElementById('main-menu').style.display = 'none';
             document.getElementById('client-wait-menu').style.display = 'flex';
@@ -599,16 +608,38 @@ function joinRoom() {
 
 function setupConnEvents(conn) {
     conn.on('open', () => {
+        if (isHost) {
+            // ارسال لیست کامل تمام بازیکنان موجود برای کلاینت جدید
+            conn.send({ type: 'room_peers', peers: Array.from(allRoomPeers) });
+            // اطلاع به سایر کلاینت‌ها که بازیکن جدید اضافه شده است
+            Object.values(connections).forEach(c => {
+                if (c.open && c.peer !== conn.peer) c.send({ type: 'peer_joined', id: conn.peer });
+            });
+        }
         if (isVoiceEnabled && localAudioStream) {
-            try { let call = peer.call(conn.peer, localAudioStream); handleVoiceCall(call); } catch (e) {}
+            callPeerVoice(conn.peer);
         }
     });
 
     conn.on('data', data => {
         if (data.type === 'start') startGame(data.mapSize);
+        else if (data.type === 'room_peers') {
+            data.peers.forEach(id => allRoomPeers.add(id));
+            allRoomPeers.add(myId);
+            if (isVoiceEnabled && localAudioStream) {
+                allRoomPeers.forEach(pId => { if (pId !== myId) callPeerVoice(pId); });
+            }
+        }
+        else if (data.type === 'peer_joined') {
+            allRoomPeers.add(data.id);
+            if (isVoiceEnabled && localAudioStream) {
+                callPeerVoice(data.id);
+            }
+        }
         else if (data.type === 'pos') {
             let targetId = data.id || conn.peer;
             
+            // RELAY: سرور میزبان این اطلاعات را برای سایر بازیکنان می‌فرستد
             if (isHost) {
                 Object.values(connections).forEach(c => {
                     if (c.open && c.peer !== targetId) c.send(data);
@@ -678,14 +709,22 @@ function setupConnEvents(conn) {
             }
         }
         else if (data.type === 'player_leave') {
+            allRoomPeers.delete(data.id);
+            if (activeVoiceCalls[data.id]) { try { activeVoiceCalls[data.id].close(); } catch(e){} delete activeVoiceCalls[data.id]; }
             if (remotePlayers[data.id]) {
                 scene.remove(remotePlayers[data.id].mesh);
                 delete remotePlayers[data.id];
+            }
+            if (remoteAudioElements[data.id]) {
+                remoteAudioElements[data.id].remove();
+                delete remoteAudioElements[data.id];
             }
         }
     });
 
     conn.on('close', () => { 
+        allRoomPeers.delete(conn.peer);
+        if (activeVoiceCalls[conn.peer]) { try { activeVoiceCalls[conn.peer].close(); } catch(e){} delete activeVoiceCalls[conn.peer]; }
         if (remotePlayers[conn.peer]) { scene.remove(remotePlayers[conn.peer].mesh); delete remotePlayers[conn.peer]; }
         if (remoteAudioElements[conn.peer]) { remoteAudioElements[conn.peer].remove(); delete remoteAudioElements[conn.peer]; }
         
@@ -698,6 +737,67 @@ function setupConnEvents(conn) {
     });
 }
 
+function callPeerVoice(targetId) {
+    if (!peer || !targetId || targetId === myId) return;
+    if (activeVoiceCalls[targetId]) return;
+    if (localAudioStream && isVoiceEnabled) {
+        try {
+            let call = peer.call(targetId, localAudioStream);
+            setupVoiceCallEvents(call);
+        } catch (e) {
+            console.error('Voice call error:', e);
+        }
+    }
+}
+
+function handleVoiceCall(call) {
+    if (!call || !call.peer) return;
+    if (activeVoiceCalls[call.peer]) {
+        try { activeVoiceCalls[call.peer].close(); } catch(e){}
+    }
+    
+    if (localAudioStream && isVoiceEnabled) {
+        call.answer(localAudioStream);
+    } else {
+        call.answer(); // پاسخ بدون استریم محلی تا کاربر بتواند صدای بقیه را بشنود
+    }
+    setupVoiceCallEvents(call);
+}
+
+function setupVoiceCallEvents(call) {
+    const peerId = call.peer;
+    activeVoiceCalls[peerId] = call;
+
+    call.on('stream', remoteStream => {
+        if (!remoteAudioElements[peerId]) {
+            let audio = document.createElement('audio');
+            audio.srcObject = remoteStream;
+            audio.autoplay = true;
+            audio.controls = false;
+            document.body.appendChild(audio);
+            remoteAudioElements[peerId] = audio;
+        } else {
+            remoteAudioElements[peerId].srcObject = remoteStream;
+        }
+    });
+
+    call.on('close', () => {
+        if (remoteAudioElements[peerId]) {
+            remoteAudioElements[peerId].remove();
+            delete remoteAudioElements[peerId];
+        }
+        delete activeVoiceCalls[peerId];
+    });
+
+    call.on('error', () => {
+        if (remoteAudioElements[peerId]) {
+            remoteAudioElements[peerId].remove();
+            delete remoteAudioElements[peerId];
+        }
+        delete activeVoiceCalls[peerId];
+    });
+}
+
 async function toggleVoiceChat() {
     const btn = document.getElementById('voice-toggle-btn');
     if (!localAudioStream) {
@@ -705,25 +805,24 @@ async function toggleVoiceChat() {
             localAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
             isVoiceEnabled = true;
             btn.innerText = '🎙️ ویس (روشن)'; btn.style.borderColor = '#22c55e'; btn.style.color = '#22c55e';
-            Object.keys(connections).forEach(peerId => { if(peer && localAudioStream) { let call = peer.call(peerId, localAudioStream); handleVoiceCall(call); } });
+            allRoomPeers.forEach(peerId => {
+                if (peerId !== myId) callPeerVoice(peerId);
+            });
         } catch (e) { alert('دسترسی به میکروفون داده نشد.'); }
     } else {
         isVoiceEnabled = !isVoiceEnabled;
-        if (localAudioStream.getAudioTracks().length > 0) localAudioStream.getAudioTracks()[0].enabled = isVoiceEnabled;
-        if (isVoiceEnabled) { btn.innerText = '🎙️ ویس (روشن)'; btn.style.borderColor = '#22c55e'; btn.style.color = '#22c55e'; } 
-        else { btn.innerText = '🎙️ ویس (خاموش)'; btn.style.borderColor = '#ef4444'; btn.style.color = '#ef4444'; }
-    }
-}
-
-function handleVoiceCall(call) {
-    if (localAudioStream) call.answer(localAudioStream); else call.answer();
-    call.on('stream', remoteStream => {
-        if (!remoteAudioElements[call.peer]) {
-            let audio = document.createElement('audio'); audio.srcObject = remoteStream; audio.autoplay = true; audio.controls = false;
-            document.body.appendChild(audio); remoteAudioElements[call.peer] = audio;
+        if (localAudioStream.getAudioTracks().length > 0) {
+            localAudioStream.getAudioTracks()[0].enabled = isVoiceEnabled;
         }
-    });
-    call.on('close', () => { if (remoteAudioElements[call.peer]) { remoteAudioElements[call.peer].remove(); delete remoteAudioElements[call.peer]; } });
+        if (isVoiceEnabled) {
+            btn.innerText = '🎙️ ویس (روشن)'; btn.style.borderColor = '#22c55e'; btn.style.color = '#22c55e';
+            allRoomPeers.forEach(peerId => {
+                if (peerId !== myId) callPeerVoice(peerId);
+            });
+        } else {
+            btn.innerText = '🎙️ ویس (خاموش)'; btn.style.borderColor = '#ef4444'; btn.style.color = '#ef4444';
+        }
+    }
 }
 
 function hostStartGame() { Object.values(connections).forEach(c => { if (c.open) c.send({ type: 'start', mapSize: MAP_SIZE }); }); startGame(MAP_SIZE); }
@@ -855,6 +954,10 @@ document.addEventListener('mousedown', e => { if (!isTouch && document.pointerLo
 document.addEventListener('mouseup', e => { if (e.button === 0 && autoFireInterval) { clearInterval(autoFireInterval); autoFireInterval = null; } });
 window.addEventListener('contextmenu', e => e.preventDefault());
 
+window.addEventListener('blur', () => {
+    if (autoFireInterval) { clearInterval(autoFireInterval); autoFireInterval = null; }
+});
+
 function gameLoop() {
     if (!isRunning) return;
     let currentHeight = isCrouched ? PLAYER_HEIGHT_CROUCH : PLAYER_HEIGHT_STAND;
@@ -865,23 +968,7 @@ function gameLoop() {
     let moveX = joystickMove.x, moveY = joystickMove.y;
     if (keys.w) moveY -= 1; if (keys.s) moveY += 1; if (keys.a) moveX -= 1; if (keys.d) moveX += 1;
 
-    let isMoving = (moveX !== 0 || moveY !== 0);
-
-    // سیستم Head Bobbing (نوسان و بالا/پایین شدن دید دوربین هنگام حرکت)
-    if (isMoving && isGrounded) {
-        headBobTimer += 0.18; // سرعت نوسان گام‌ها
-        let bobY = Math.sin(headBobTimer) * 0.28; // دامنه نوسان عمودی (بالا پایین)
-        let bobX = Math.cos(headBobTimer * 0.5) * 0.15; // دامنه نوسان افقی (چپ راست)
-        
-        camera.position.y = THREE.MathUtils.lerp(camera.position.y, bobY, 0.2);
-        camera.position.x = THREE.MathUtils.lerp(camera.position.x, bobX, 0.2);
-    } else {
-        // بازگشت نرم دوربین به مرکز هنگام توقف
-        camera.position.y = THREE.MathUtils.lerp(camera.position.y, 0, 0.1);
-        camera.position.x = THREE.MathUtils.lerp(camera.position.x, 0, 0.1);
-    }
-
-    if (isMoving) {
+    if (moveX !== 0 || moveY !== 0) {
         let moveDir = new THREE.Vector3();
         let forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yawObject.rotation.y);
         let right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yawObject.rotation.y);
@@ -928,17 +1015,9 @@ function gameLoop() {
         let moved = rp.mesh.position.distanceTo(rp.lastPos) > 0.001;
         if (moved && rp.mesh.userData.leftLeg && rp.mesh.userData.rightLeg) {
             let legAngle = Math.sin(walkCycle) * 0.6;
-            rp.mesh.userData.leftLeg.rotation.x = legAngle; 
-            rp.mesh.userData.rightLeg.rotation.x = -legAngle;
-            if (rp.mesh.userData.leftArm && rp.mesh.userData.rightArm) {
-                rp.mesh.userData.leftArm.rotation.x = -legAngle * 0.5;
-                rp.mesh.userData.rightArm.rotation.x = legAngle * 0.5;
-            }
+            rp.mesh.userData.leftLeg.rotation.x = legAngle; rp.mesh.userData.rightLeg.rotation.x = -legAngle;
         } else if (rp.mesh.userData.leftLeg && rp.mesh.userData.rightLeg) {
             rp.mesh.userData.leftLeg.rotation.x = 0; rp.mesh.userData.rightLeg.rotation.x = 0;
-            if (rp.mesh.userData.leftArm && rp.mesh.userData.rightArm) {
-                rp.mesh.userData.leftArm.rotation.x = 0; rp.mesh.userData.rightArm.rotation.x = 0;
-            }
         }
         rp.lastPos.copy(rp.mesh.position);
     });
