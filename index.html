@@ -293,7 +293,6 @@ let currentWeapon = 'pistol', akUnlocked = false, sniperUnlocked = false;
 let autoFireInterval = null, isZoomed = false, userGraphicsQuality = 'high';
 let localWeaponMesh = null, muzzleLight = null;
 
-// مدیریت شبکه چت صوتی شبکه Mesh
 let localAudioStream = null, isVoiceEnabled = false, remoteAudioElements = {};
 let allRoomPeers = new Set();
 let activeVoiceCalls = {};
@@ -606,20 +605,33 @@ function joinRoom() {
     peer.on('call', handleVoiceCall);
 }
 
+function handleConnOpen(conn) {
+    if (isHost) {
+        conn.send({ type: 'room_peers', peers: Array.from(allRoomPeers) });
+        
+        // اگر هاست قبل از ورود بازیکن جدید بازی را شروع کرده باشد، بلافاصله سیگنال شروع فرستاده می‌شود
+        if (isRunning) {
+            conn.send({ type: 'start', mapSize: MAP_SIZE });
+        }
+        
+        // اطلاع به سایر بازیکنان در مورد ورود بازیکن جدید
+        Object.values(connections).forEach(c => {
+            if (c.open && c.peer !== conn.peer) {
+                c.send({ type: 'peer_joined', id: conn.peer });
+            }
+        });
+    }
+    if (isVoiceEnabled && localAudioStream) {
+        callPeerVoice(conn.peer);
+    }
+}
+
 function setupConnEvents(conn) {
-    conn.on('open', () => {
-        if (isHost) {
-            // ارسال لیست کامل تمام بازیکنان موجود برای کلاینت جدید
-            conn.send({ type: 'room_peers', peers: Array.from(allRoomPeers) });
-            // اطلاع به سایر کلاینت‌ها که بازیکن جدید اضافه شده است
-            Object.values(connections).forEach(c => {
-                if (c.open && c.peer !== conn.peer) c.send({ type: 'peer_joined', id: conn.peer });
-            });
-        }
-        if (isVoiceEnabled && localAudioStream) {
-            callPeerVoice(conn.peer);
-        }
-    });
+    if (conn.open) {
+        handleConnOpen(conn);
+    } else {
+        conn.on('open', () => handleConnOpen(conn));
+    }
 
     conn.on('data', data => {
         if (data.type === 'start') startGame(data.mapSize);
@@ -639,7 +651,6 @@ function setupConnEvents(conn) {
         else if (data.type === 'pos') {
             let targetId = data.id || conn.peer;
             
-            // RELAY: سرور میزبان این اطلاعات را برای سایر بازیکنان می‌فرستد
             if (isHost) {
                 Object.values(connections).forEach(c => {
                     if (c.open && c.peer !== targetId) c.send(data);
@@ -724,6 +735,7 @@ function setupConnEvents(conn) {
 
     conn.on('close', () => { 
         allRoomPeers.delete(conn.peer);
+        delete connections[conn.peer];
         if (activeVoiceCalls[conn.peer]) { try { activeVoiceCalls[conn.peer].close(); } catch(e){} delete activeVoiceCalls[conn.peer]; }
         if (remotePlayers[conn.peer]) { scene.remove(remotePlayers[conn.peer].mesh); delete remotePlayers[conn.peer]; }
         if (remoteAudioElements[conn.peer]) { remoteAudioElements[conn.peer].remove(); delete remoteAudioElements[conn.peer]; }
@@ -732,7 +744,7 @@ function setupConnEvents(conn) {
             Object.values(connections).forEach(c => {
                 if (c.open && c.peer !== conn.peer) c.send({ type: 'player_leave', id: conn.peer });
             });
-            document.getElementById('host-status').innerText = `بازیکنان متصل: ${Object.keys(connections).length} / ۵۰`;
+            document.getElementById('host-status').innerText = `بازیکنان متصل: ${Object.keys(connections).length + 1} / ۵۰`;
         }
     });
 }
@@ -759,7 +771,7 @@ function handleVoiceCall(call) {
     if (localAudioStream && isVoiceEnabled) {
         call.answer(localAudioStream);
     } else {
-        call.answer(); // پاسخ بدون استریم محلی تا کاربر بتواند صدای بقیه را بشنود
+        call.answer();
     }
     setupVoiceCallEvents(call);
 }
