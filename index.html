@@ -17,14 +17,14 @@
             background-color: #000000; display: flex; justify-content: center; align-items: center;
             z-index: 9999;
             animation: fadeOutScreen 0.5s ease forwards;
-            animation-delay: 3.5s;
+            animation-delay: 2.5s;
         }
         .gaming-logo {
             color: #ef4444; font-family: Tahoma, sans-serif; font-size: 3rem; font-weight: bold;
             text-align: center; line-height: 1.2; text-shadow: 0 0 20px rgba(239, 68, 68, 0.7);
             opacity: 0;
             animation: textAppear 1s ease forwards;
-            animation-delay: 1s;
+            animation-delay: 0.5s;
         }
         @keyframes textAppear {
             0% { opacity: 0; transform: scale(0.9); }
@@ -80,7 +80,6 @@
         }
         #jump-btn { left: 15px; color: #f59e0b; }
         #crouch-btn { left: 70px; }
-        .top-action-btn.active { background: #38bdf8; color: #0f172a; }
 
         #voice-toggle-btn {
             position: absolute; top: 15px; right: 15px; width: auto; padding: 0 10px;
@@ -117,7 +116,6 @@
             border-radius: 50%; display: none; justify-content: center; align-items: center;
             font-size: 11px; font-weight: bold; z-index: 15; pointer-events: auto; color: #f59e0b;
         }
-        #zoom-btn.active { background: #f59e0b; color: #0f172a; }
 
         #mobile-reload-btn {
             position: absolute; bottom: 35px; left: 155px; width: 55px; height: 55px;
@@ -273,7 +271,7 @@
 <div id="game-over" class="menu-overlay" style="display: none;">
     <div class="menu-box">
         <h1 style="color: #ef4444;">مردید!</h1>
-        <button class="btn" onclick="location.reload()">تلاش مجدد</button>
+        <button class="btn" onclick="respawnPlayer()">اسپاون مجدد</button>
     </div>
 </div>
 
@@ -282,40 +280,37 @@ let peer = null, isHost = false, myId = '';
 let connections = {}, scene, camera, renderer, yawObject, pitchObject;
 let isRunning = false, playerHealth = 100, playerScore = 0;
 let walls = [], wallMeshes = [], remotePlayers = {}, isDead = false;
-let lastDamageTime = 0;
 
 let playerVelocityY = 0, isGrounded = true, isCrouched = false;
 const gravity = -30, PLAYER_SPEED_WALK = 27;
 let MAP_SIZE = 1125;
 const PLAYER_HEIGHT_STAND = 7.8, PLAYER_HEIGHT_CROUCH = 3.9;
 
-let currentWeapon = 'pistol', akUnlocked = false, sniperUnlocked = false;
-let autoFireInterval = null, isZoomed = false, userGraphicsQuality = 'high';
+let currentWeapon = 'pistol';
+let isZoomed = false, userGraphicsQuality = 'high';
 let localWeaponMesh = null, muzzleLight = null;
 
-let localAudioStream = null, isVoiceEnabled = false, remoteAudioElements = {};
 let allRoomPeers = new Set();
-let activeVoiceCalls = {};
-
 let currentAmmo = 12, maxAmmo = 12, isReloading = false;
 let crosshairStyleIndex = 0, lastFireTime = 0, lastPosSendTime = 0;
 
-let isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+let joystickVector = { x: 0, y: 0 };
 
 const peerConfig = { config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] } };
 
 const WEAPONS_CONFIG = {
-    pistol: { name: 'کلت', fireRate: 350, auto: false, dmgBody: 10, dmgHead: 50, clipSize: 12, reloadTime: 1200, maxRange: 0.25 },
-    ak:     { name: 'AK رگباری', fireRate: 150, auto: true, dmgBody: 5, dmgHead: 35, clipSize: 30, reloadTime: 1800, maxRange: 1/6 },
-    sniper: { name: 'اسنایپر', fireRate: 800, auto: false, dmgBody: 50, dmgHead: 100, clipSize: 5, reloadTime: 2500, maxRange: 0.5 }
+    pistol: { name: 'کلت', fireRate: 350, auto: false, dmgBody: 20, dmgHead: 50, clipSize: 12, reloadTime: 1200 },
+    ak:     { name: 'AK رگباری', fireRate: 150, auto: true, dmgBody: 15, dmgHead: 35, clipSize: 30, reloadTime: 1800 },
+    sniper: { name: 'اسنایپر', fireRate: 800, auto: false, dmgBody: 70, dmgHead: 100, clipSize: 5, reloadTime: 2500 }
 };
 
 function getValidSpawnPosition() {
     const testBox = new THREE.Box3();
-    let valid = false, x = 0, z = 0, attempts = 0, limit = MAP_SIZE * 0.45;
+    let valid = false, x = 0, z = 0, attempts = 0, limit = MAP_SIZE * 0.4;
     const safeSize = new THREE.Vector3(3.5, PLAYER_HEIGHT_STAND, 3.5);
 
-    while (!valid && attempts < 1000) {
+    while (!valid && attempts < 500) {
         attempts++;
         x = (Math.random() - 0.5) * limit * 2;
         z = (Math.random() - 0.5) * limit * 2;
@@ -364,11 +359,12 @@ function createHealthBarSprite() {
     const texture = new THREE.CanvasTexture(canvas);
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture }));
     sprite.scale.set(4.5, 0.6, 1);
-    sprite.position.y = 8.5;
+    sprite.position.y = 9.5;
     return { sprite, canvas, ctx, texture };
 }
 
 function updateHealthBar(hpData, hp) {
+    if(!hpData) return;
     const { ctx, canvas, texture } = hpData;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
@@ -408,17 +404,12 @@ function createDetailedPlayerModel() {
     gun.position.set(1.6, 2.6, 1.6);
     group.add(gun);
 
-    const legMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6 });
-    const leftLeg = new THREE.Mesh(new THREE.BoxGeometry(0.8, 3.5, 0.8), legMat);
-    leftLeg.position.set(-0.8, -0.2, 0);
-    group.add(leftLeg);
-
-    const rightLeg = new THREE.Mesh(new THREE.BoxGeometry(0.8, 3.5, 0.8), legMat);
-    rightLeg.position.set(0.8, -0.2, 0);
-    group.add(rightLeg);
+    const hpData = createHealthBarSprite();
+    group.add(hpData.sprite);
 
     group.scale.set(1.3, 1.3, 1.3);
-    group.userData = { leftLeg, rightLeg };
+    group.userData = { head, body, hpData, hp: 100 };
+    updateHealthBar(hpData, 100);
     return group;
 }
 
@@ -432,10 +423,6 @@ function createTexture(quality, isWall) {
         ctx.fillStyle = '#1e293b'; ctx.fillRect(0, 0, size, size);
         ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = size / 64;
         ctx.strokeRect(size * 0.05, size * 0.05, size * 0.9, size * 0.9);
-        if(quality !== 'low') {
-            ctx.fillStyle = 'rgba(56, 189, 248, 0.15)';
-            ctx.fillRect(size * 0.1, size * 0.1, size * 0.8, size * 0.8);
-        }
     } else {
         ctx.fillStyle = '#0f172a'; ctx.fillRect(0, 0, size, size);
         ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 3;
@@ -455,7 +442,7 @@ function initEngine() {
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x090d16);
-    scene.fog = new THREE.FogExp2(0x090d16, userGraphicsQuality === 'high' ? 0.001 : 0.0015);
+    scene.fog = new THREE.FogExp2(0x090d16, 0.001);
 
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
     renderer = new THREE.WebGLRenderer({ antialias: userGraphicsQuality !== 'low', powerPreference: "high-performance" });
@@ -463,51 +450,22 @@ function initEngine() {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.1;
 
-    if (userGraphicsQuality !== 'low') { 
-        renderer.shadowMap.enabled = true; 
-        renderer.shadowMap.type = userGraphicsQuality === 'high' ? THREE.PCFSoftShadowMap : THREE.BasicShadowMap; 
-    }
     container.appendChild(renderer.domElement);
 
-    const hemiLight = new THREE.HemisphereLight(0x38bdf8, 0x0f172a, userGraphicsQuality === 'high' ? 1.8 : 1.2);
+    const hemiLight = new THREE.HemisphereLight(0x38bdf8, 0x0f172a, 1.5);
     hemiLight.position.set(0, 500, 0);
     scene.add(hemiLight);
 
-    const dirLight = new THREE.DirectionalLight(0xfffbe0, userGraphicsQuality === 'high' ? 2.2 : 1.5);
+    const dirLight = new THREE.DirectionalLight(0xfffbe0, 1.8);
     dirLight.position.set(300, 600, 200);
-    if (userGraphicsQuality !== 'low') {
-        dirLight.castShadow = true;
-        dirLight.shadow.mapSize.width = userGraphicsQuality === 'high' ? 2048 : 1024;
-        dirLight.shadow.mapSize.height = userGraphicsQuality === 'high' ? 2048 : 1024;
-        dirLight.shadow.bias = -0.0001;
-    }
     scene.add(dirLight);
 
-    if (userGraphicsQuality !== 'low') {
-        const pointLight1 = new THREE.PointLight(0x38bdf8, 3, 250);
-        pointLight1.position.set(0, 30, 0);
-        scene.add(pointLight1);
-
-        const pointLight2 = new THREE.PointLight(0xef4444, 3, 250);
-        pointLight2.position.set(-250, 30, -250);
-        scene.add(pointLight2);
-
-        const pointLight3 = new THREE.PointLight(0xf59e0b, 3, 250);
-        pointLight3.position.set(250, 30, 250);
-        scene.add(pointLight3);
-    }
-
     const floorTexture = createTexture(userGraphicsQuality, false);
-    let scaleFactor = MAP_SIZE / 750;
-    floorTexture.repeat.set(Math.floor(30 * scaleFactor), Math.floor(30 * scaleFactor));
+    floorTexture.repeat.set(40, 40);
     
-    const floorMat = userGraphicsQuality === 'low' 
-        ? new THREE.MeshBasicMaterial({ map: floorTexture }) 
-        : new THREE.MeshStandardMaterial({ map: floorTexture, roughness: 0.15, metalness: 0.5 });
-    
+    const floorMat = new THREE.MeshStandardMaterial({ map: floorTexture, roughness: 0.2, metalness: 0.4 });
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(MAP_SIZE, MAP_SIZE), floorMat);
     floor.rotation.x = -Math.PI / 2;
-    if (userGraphicsQuality !== 'low') floor.receiveShadow = true;
     scene.add(floor);
 
     const visualWalls = new THREE.Group();
@@ -516,37 +474,17 @@ function initEngine() {
     const BASE_MAZE = [
         [0, 40, -565, 1150, 80, 25], [0, 40, 565, 1150, 80, 25], [-565, 40, 0, 25, 80, 1150], [565, 40, 0, 25, 80, 1150],
         [-300, 14, -300, 90, 28, 150], [300, 14, -300, 90, 28, 150], [-300, 14, 300, 90, 28, 150], [300, 14, 300, 90, 28, 150],
-        [0, 14, -225, 270, 28, 30], [0, 14, 225, 270, 28, 30], [-225, 14, 0, 30, 28, 270], [225, 14, 0, 30, 28, 270],
-        [-150, 14, -400, 120, 28, 25], [150, 14, -400, 120, 28, 25], [-150, 14, 400, 120, 28, 25], [150, 14, 400, 120, 28, 25],
-        [-400, 14, -150, 25, 28, 120], [400, 14, -150, 25, 28, 120], [-400, 14, 150, 25, 28, 120], [400, 14, 150, 25, 28, 120],
-        [-250, 14, -100, 40, 28, 80], [250, 14, 100, 40, 28, 80], [-100, 14, -250, 80, 28, 40], [100, 14, 250, 80, 28, 40],
-        [0, 14, 0, 80, 28, 80], [-100, 14, -100, 50, 28, 50], [100, 14, 100, 50, 28, 50], [-100, 14, 100, 50, 28, 50], [100, 14, -100, 50, 28, 50],
-        [0, 14, -450, 150, 28, 20], [0, 14, 450, 150, 28, 20], [-450, 14, 0, 20, 28, 150], [450, 14, 0, 20, 28, 150],
-        [-200, 14, -480, 80, 28, 20], [200, 14, -480, 80, 28, 20], [-200, 14, 480, 80, 28, 20], [200, 14, 480, 80, 28, 20],
-        [-480, 14, -200, 20, 28, 80], [-480, 14, 200, 20, 28, 80], [480, 14, -200, 20, 28, 80], [480, 14, 200, 20, 28, 80],
-        [-350, 14, -350, 40, 28, 40], [350, 14, -350, 40, 28, 40], [-350, 14, 350, 40, 28, 40], [350, 14, 350, 40, 28, 40],
-        [-180, 14, -180, 30, 28, 30], [180, 14, -180, 30, 28, 30], [-180, 14, 180, 30, 28, 30], [180, 14, 180, 30, 28, 30],
-        [0, 14, -350, 100, 28, 20], [0, 14, 350, 100, 28, 20], [-350, 14, 0, 20, 28, 100], [350, 14, 0, 20, 28, 100],
-        [-50, 14, -120, 60, 28, 15], [50, 14, 120, 60, 28, 15], [-120, 14, 50, 15, 28, 60], [120, 14, -50, 15, 28, 60],
-        [-280, 14, -200, 20, 28, 80], [280, 14, 200, 20, 28, 80], [-200, 14, -280, 80, 28, 20], [200, 14, 280, 80, 28, 20],
-        [-280, 14, 200, 20, 28, 80], [280, 14, -200, 20, 28, 80], [-200, 14, 280, 80, 28, 20], [200, 14, -280, 80, 28, 20],
-        [-100, 14, -480, 40, 28, 20], [100, 14, -480, 40, 28, 20], [-100, 14, 480, 40, 28, 20], [100, 14, 480, 40, 28, 20],
-        [-480, 14, -100, 20, 28, 40], [480, 14, -100, 20, 28, 40], [-480, 14, 100, 20, 28, 40], [480, 14, 100, 20, 28, 40],
-        [-140, 14, -140, 50, 28, 20], [140, 14, 140, 50, 28, 20], [-140, 14, 140, 20, 28, 50], [140, 14, -140, 20, 28, 50],
-        [-320, 14, 0, 30, 28, 90], [320, 14, 0, 30, 28, 90], [0, 14, -320, 90, 28, 30], [0, 14, 320, 90, 28, 30]
+        [0, 14, -225, 270, 28, 30], [0, 14, 225, 270, 28, 30], [-225, 14, 0, 30, 28, 270], [225, 14, 0, 30, 28, 270]
     ];
     
-    const wallMat = userGraphicsQuality === 'low' 
-        ? new THREE.MeshBasicMaterial({ map: createTexture(userGraphicsQuality, true) }) 
-        : new THREE.MeshStandardMaterial({ map: createTexture(userGraphicsQuality, true), roughness: 0.2, metalness: 0.3 });
+    const wallMat = new THREE.MeshStandardMaterial({ map: createTexture(userGraphicsQuality, true), roughness: 0.2 });
 
     walls = [];
     wallMeshes = [];
     BASE_MAZE.forEach(b => {
         const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), wallMat);
-        mesh.position.set(b[0] * (scaleFactor * 0.8), b[1], b[2] * (scaleFactor * 0.8));
-        mesh.scale.set(b[3] * (scaleFactor * 0.8), b[4], b[5] * (scaleFactor * 0.8));
-        if (userGraphicsQuality !== 'low') { mesh.castShadow = true; mesh.receiveShadow = true; }
+        mesh.position.set(b[0], b[1], b[2]);
+        mesh.scale.set(b[3], b[4], b[5]);
         visualWalls.add(mesh);
         wallMeshes.push(mesh);
         walls.push(new THREE.Box3().setFromCenterAndSize(mesh.position, mesh.scale));
@@ -554,12 +492,13 @@ function initEngine() {
 
     yawObject = new THREE.Object3D(); pitchObject = new THREE.Object3D();
     scene.add(yawObject); yawObject.add(pitchObject); pitchObject.add(camera);
-    pitchObject.rotation.x = 0.35;
 
     const gunGroup = new THREE.Group();
-    gunGroup.add(new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.5, 2.2), new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.9, roughness: 0.1 })));
+    gunGroup.add(new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.5, 2.2), new THREE.MeshStandardMaterial({ color: 0x334155 })));
     muzzleLight = new THREE.PointLight(0xf59e0b, 0, 20); muzzleLight.position.set(0, 0.15, -1.5); gunGroup.add(muzzleLight);
     localWeaponMesh = gunGroup; localWeaponMesh.position.set(0.55, -0.55, -1.1); camera.add(localWeaponMesh);
+
+    setupControls();
 }
 
 function setGraphicsQuality(q) { 
@@ -578,7 +517,6 @@ function createRoom() {
         document.getElementById('host-wait-menu').style.display = 'flex';
         document.getElementById('my-room-code').innerText = id;
     });
-    peer.on('call', handleVoiceCall);
     peer.on('connection', conn => {
         connections[conn.peer] = conn; 
         allRoomPeers.add(conn.peer);
@@ -602,439 +540,330 @@ function joinRoom() {
             document.getElementById('connected-room-code').innerText = code;
         });
     });
-    peer.on('call', handleVoiceCall);
-}
-
-function handleConnOpen(conn) {
-    if (isHost) {
-        conn.send({ type: 'room_peers', peers: Array.from(allRoomPeers) });
-        
-        // اگر هاست قبل از ورود بازیکن جدید بازی را شروع کرده باشد، بلافاصله سیگنال شروع فرستاده می‌شود
-        if (isRunning) {
-            conn.send({ type: 'start', mapSize: MAP_SIZE });
-        }
-        
-        // اطلاع به سایر بازیکنان در مورد ورود بازیکن جدید
-        Object.values(connections).forEach(c => {
-            if (c.open && c.peer !== conn.peer) {
-                c.send({ type: 'peer_joined', id: conn.peer });
-            }
-        });
-    }
-    if (isVoiceEnabled && localAudioStream) {
-        callPeerVoice(conn.peer);
-    }
 }
 
 function setupConnEvents(conn) {
-    if (conn.open) {
-        handleConnOpen(conn);
-    } else {
-        conn.on('open', () => handleConnOpen(conn));
-    }
-
     conn.on('data', data => {
-        if (data.type === 'start') startGame(data.mapSize);
-        else if (data.type === 'room_peers') {
-            data.peers.forEach(id => allRoomPeers.add(id));
-            allRoomPeers.add(myId);
-            if (isVoiceEnabled && localAudioStream) {
-                allRoomPeers.forEach(pId => { if (pId !== myId) callPeerVoice(pId); });
+        try {
+            if (data.type === 'start') {
+                startGame();
+            } else if (data.type === 'pos') {
+                if (!remotePlayers[data.id]) {
+                    remotePlayers[data.id] = createDetailedPlayerModel();
+                    scene.add(remotePlayers[data.id]);
+                }
+                const p = remotePlayers[data.id];
+                p.position.set(data.x, data.y, data.z);
+                p.rotation.y = data.ry;
+                if(data.hp !== undefined) {
+                    p.userData.hp = data.hp;
+                    updateHealthBar(p.userData.hpData, data.hp);
+                }
+            } else if (data.type === 'hit') {
+                if (data.target === myId) {
+                    takeDamage(data.dmg, data.attacker);
+                }
+            } else if (data.type === 'kill') {
+                addKillFeed(data.killer, data.victim);
             }
-        }
-        else if (data.type === 'peer_joined') {
-            allRoomPeers.add(data.id);
-            if (isVoiceEnabled && localAudioStream) {
-                callPeerVoice(data.id);
-            }
-        }
-        else if (data.type === 'pos') {
-            let targetId = data.id || conn.peer;
-            
+
+            // Host Relaying (ارسال مجدد پیام‌ها برای سایر بازیکنان)
             if (isHost) {
-                Object.values(connections).forEach(c => {
-                    if (c.open && c.peer !== targetId) c.send(data);
-                });
+                broadcastExcept(data, conn.peer);
             }
-
-            if (targetId === myId) return;
-
-            if (!remotePlayers[targetId]) {
-                let playerMesh = createDetailedPlayerModel();
-                let hpData = createHealthBarSprite();
-                playerMesh.add(hpData.sprite);
-                if (userGraphicsQuality !== 'low') playerMesh.castShadow = true;
-                scene.add(playerMesh); 
-                remotePlayers[targetId] = { mesh: playerMesh, targetPos: new THREE.Vector3(), health: 100, hpData: hpData, lastPos: new THREE.Vector3() };
-                updateHealthBar(hpData, 100);
-            }
-            let rp = remotePlayers[targetId];
-            rp.lastPos.copy(rp.mesh.position);
-            rp.targetPos.set(data.x, data.y - 7.8, data.z); 
-            
-            if (rp.health !== data.hp) {
-                rp.health = data.hp;
-                updateHealthBar(rp.hpData, rp.health);
-                if (rp.health <= 0) {
-                    scene.remove(rp.mesh);
-                } else if (!scene.children.includes(rp.mesh)) {
-                    scene.add(rp.mesh);
-                }
-            }
-        }
-        else if (data.type === 'hit') {
-            if (isHost && data.targetId !== myId) {
-                if (connections[data.targetId] && connections[data.targetId].open) {
-                    connections[data.targetId].send(data);
-                }
-                return;
-            }
-
-            if (data.targetId === myId) {
-                playerHealth -= data.dmg;
-                lastDamageTime = performance.now();
-                document.getElementById('hp-val').innerText = playerHealth > 0 ? playerHealth : 0;
-                document.getElementById('damage-overlay').style.boxShadow = 'inset 0 0 120px rgba(239, 68, 68, 0.8)';
-                setTimeout(() => document.getElementById('damage-overlay').style.boxShadow = 'inset 0 0 80px rgba(239, 68, 68, 0)', 200);
-                
-                if (playerHealth <= 0 && !isDead) { 
-                    isDead = true; 
-                    document.getElementById('game-over').style.display = 'flex'; 
-                    let deathMsg = { type: 'kill_confirmed', killerId: data.attackerId, victimId: myId };
-                    Object.values(connections).forEach(c => { if(c.open) c.send(deathMsg); }); 
-                }
-            }
-        }
-        else if (data.type === 'kill_confirmed') {
-            if (isHost) {
-                Object.values(connections).forEach(c => {
-                    if (c.open && c.peer !== conn.peer) c.send(data);
-                });
-            }
-
-            if (data.killerId === myId) {
-                playerScore++; document.getElementById('score-val').innerText = playerScore;
-                document.getElementById('shop-score-val').innerText = playerScore;
-                if(playerScore >= 1) { akUnlocked = true; sniperUnlocked = true; document.getElementById('shop-btn-ak').removeAttribute('disabled'); document.getElementById('shop-btn-ak').style.opacity = '1'; document.getElementById('shop-btn-sniper').removeAttribute('disabled'); document.getElementById('shop-btn-sniper').style.opacity = '1'; }
-                let div = document.createElement('div'); div.className = 'killfeed-item'; div.innerText = `یک کیل گرفتید!`; document.getElementById('killfeed').appendChild(div); setTimeout(() => div.remove(), 4000);
-            }
-        }
-        else if (data.type === 'player_leave') {
-            allRoomPeers.delete(data.id);
-            if (activeVoiceCalls[data.id]) { try { activeVoiceCalls[data.id].close(); } catch(e){} delete activeVoiceCalls[data.id]; }
-            if (remotePlayers[data.id]) {
-                scene.remove(remotePlayers[data.id].mesh);
-                delete remotePlayers[data.id];
-            }
-            if (remoteAudioElements[data.id]) {
-                remoteAudioElements[data.id].remove();
-                delete remoteAudioElements[data.id];
-            }
+        } catch(e) {
+            console.error("Network Packet Error:", e);
         }
     });
 
-    conn.on('close', () => { 
-        allRoomPeers.delete(conn.peer);
+    conn.on('close', () => {
+        if (remotePlayers[conn.peer]) {
+            scene.remove(remotePlayers[conn.peer]);
+            delete remotePlayers[conn.peer];
+        }
         delete connections[conn.peer];
-        if (activeVoiceCalls[conn.peer]) { try { activeVoiceCalls[conn.peer].close(); } catch(e){} delete activeVoiceCalls[conn.peer]; }
-        if (remotePlayers[conn.peer]) { scene.remove(remotePlayers[conn.peer].mesh); delete remotePlayers[conn.peer]; }
-        if (remoteAudioElements[conn.peer]) { remoteAudioElements[conn.peer].remove(); delete remoteAudioElements[conn.peer]; }
-        
-        if (isHost) {
-            Object.values(connections).forEach(c => {
-                if (c.open && c.peer !== conn.peer) c.send({ type: 'player_leave', id: conn.peer });
-            });
-            document.getElementById('host-status').innerText = `بازیکنان متصل: ${Object.keys(connections).length + 1} / ۵۰`;
+    });
+}
+
+function broadcastExcept(data, senderId) {
+    Object.keys(connections).forEach(id => {
+        if (id !== senderId && connections[id] && connections[id].open) {
+            connections[id].send(data);
         }
     });
 }
 
-function callPeerVoice(targetId) {
-    if (!peer || !targetId || targetId === myId) return;
-    if (activeVoiceCalls[targetId]) return;
-    if (localAudioStream && isVoiceEnabled) {
-        try {
-            let call = peer.call(targetId, localAudioStream);
-            setupVoiceCallEvents(call);
-        } catch (e) {
-            console.error('Voice call error:', e);
-        }
-    }
-}
-
-function handleVoiceCall(call) {
-    if (!call || !call.peer) return;
-    if (activeVoiceCalls[call.peer]) {
-        try { activeVoiceCalls[call.peer].close(); } catch(e){}
-    }
-    
-    if (localAudioStream && isVoiceEnabled) {
-        call.answer(localAudioStream);
-    } else {
-        call.answer();
-    }
-    setupVoiceCallEvents(call);
-}
-
-function setupVoiceCallEvents(call) {
-    const peerId = call.peer;
-    activeVoiceCalls[peerId] = call;
-
-    call.on('stream', remoteStream => {
-        if (!remoteAudioElements[peerId]) {
-            let audio = document.createElement('audio');
-            audio.srcObject = remoteStream;
-            audio.autoplay = true;
-            audio.controls = false;
-            document.body.appendChild(audio);
-            remoteAudioElements[peerId] = audio;
-        } else {
-            remoteAudioElements[peerId].srcObject = remoteStream;
+function broadcastAll(data) {
+    Object.keys(connections).forEach(id => {
+        if (connections[id] && connections[id].open) {
+            connections[id].send(data);
         }
     });
-
-    call.on('close', () => {
-        if (remoteAudioElements[peerId]) {
-            remoteAudioElements[peerId].remove();
-            delete remoteAudioElements[peerId];
-        }
-        delete activeVoiceCalls[peerId];
-    });
-
-    call.on('error', () => {
-        if (remoteAudioElements[peerId]) {
-            remoteAudioElements[peerId].remove();
-            delete remoteAudioElements[peerId];
-        }
-        delete activeVoiceCalls[peerId];
-    });
 }
 
-async function toggleVoiceChat() {
-    const btn = document.getElementById('voice-toggle-btn');
-    if (!localAudioStream) {
-        try {
-            localAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-            isVoiceEnabled = true;
-            btn.innerText = '🎙️ ویس (روشن)'; btn.style.borderColor = '#22c55e'; btn.style.color = '#22c55e';
-            allRoomPeers.forEach(peerId => {
-                if (peerId !== myId) callPeerVoice(peerId);
-            });
-        } catch (e) { alert('دسترسی به میکروفون داده نشد.'); }
-    } else {
-        isVoiceEnabled = !isVoiceEnabled;
-        if (localAudioStream.getAudioTracks().length > 0) {
-            localAudioStream.getAudioTracks()[0].enabled = isVoiceEnabled;
-        }
-        if (isVoiceEnabled) {
-            btn.innerText = '🎙️ ویس (روشن)'; btn.style.borderColor = '#22c55e'; btn.style.color = '#22c55e';
-            allRoomPeers.forEach(peerId => {
-                if (peerId !== myId) callPeerVoice(peerId);
-            });
-        } else {
-            btn.innerText = '🎙️ ویس (خاموش)'; btn.style.borderColor = '#ef4444'; btn.style.color = '#ef4444';
-        }
-    }
+function hostStartGame() {
+    broadcastAll({ type: 'start' });
+    startGame();
 }
 
-function hostStartGame() { Object.values(connections).forEach(c => { if (c.open) c.send({ type: 'start', mapSize: MAP_SIZE }); }); startGame(MAP_SIZE); }
-
-function startGame(size) {
-    MAP_SIZE = size || MAP_SIZE;
-    document.querySelectorAll('.menu-overlay').forEach(el => el.style.display = 'none');
+function startGame() {
+    document.getElementById('host-wait-menu').style.display = 'none';
+    document.getElementById('client-wait-menu').style.display = 'none';
     document.getElementById('ui-layer').style.display = 'block';
-    if (isTouch) document.getElementById('mobile-controls').style.display = 'block';
-    initEngine(); let pos = getValidSpawnPosition(); yawObject.position.set(pos.x, PLAYER_HEIGHT_STAND, pos.z);
-    isRunning = true; document.getElementById('zoom-btn').style.display = 'flex';
+    if('ontouchstart' in window) document.getElementById('mobile-controls').style.display = 'block';
+    
+    initEngine();
+    respawnPlayer();
+    isRunning = true;
     requestAnimationFrame(gameLoop);
 }
 
-function toggleShopModal() { const m = document.getElementById('shop-modal'); m.style.display = m.style.display === 'none' ? 'flex' : 'none'; }
-function selectWeapon(w) { if((w==='ak'&&!akUnlocked) || (w==='sniper'&&!sniperUnlocked)) return; currentWeapon = w; currentAmmo = WEAPONS_CONFIG[w].clipSize; maxAmmo = currentAmmo; document.getElementById('weapon-display').innerText = WEAPONS_CONFIG[w].name; document.getElementById('ammo-val').innerText = `${currentAmmo}/${maxAmmo}`; toggleShopModal(); }
-function toggleCrouch() { isCrouched = !isCrouched; document.getElementById('crouch-btn').classList.toggle('active', isCrouched); }
-function triggerJump() { if (isGrounded) { playerVelocityY = 12; isGrounded = false; } }
-function toggleZoom() { if (currentWeapon !== 'sniper') return; isZoomed = !isZoomed; document.getElementById('zoom-btn').classList.toggle('active', isZoomed); document.getElementById('sniper-scope').style.display = isZoomed ? 'block' : 'none'; camera.fov = isZoomed ? 25 : 75; camera.updateProjectionMatrix(); }
-function cycleCrosshairStyle() { crosshairStyleIndex = (crosshairStyleIndex + 1) % 3; const ch = document.getElementById('crosshair'); ch.style.borderRadius = crosshairStyleIndex === 0 ? '50%' : (crosshairStyleIndex === 1 ? '0%' : '4px'); }
+function respawnPlayer() {
+    document.getElementById('game-over').style.display = 'none';
+    const spawn = getValidSpawnPosition();
+    yawObject.position.set(spawn.x, PLAYER_HEIGHT_STAND, spawn.z);
+    playerHealth = 100;
+    isDead = false;
+    document.getElementById('hp-val').innerText = playerHealth;
+    document.getElementById('damage-overlay').style.boxShadow = 'none';
+}
+
+function takeDamage(amount, attackerId) {
+    if (isDead) return;
+    playerHealth -= amount;
+    document.getElementById('hp-val').innerText = Math.max(0, playerHealth);
+    
+    document.getElementById('damage-overlay').style.boxShadow = 'inset 0 0 80px rgba(239, 68, 68, 0.8)';
+    setTimeout(() => { document.getElementById('damage-overlay').style.boxShadow = 'none'; }, 200);
+
+    if (playerHealth <= 0) {
+        isDead = true;
+        document.getElementById('game-over').style.display = 'flex';
+        broadcastAll({ type: 'kill', killer: attackerId, victim: myId });
+        addKillFeed(attackerId, myId);
+    }
+}
+
+function addKillFeed(killer, victim) {
+    const feed = document.getElementById('killfeed');
+    const item = document.createElement('div');
+    item.className = 'killfeed-item';
+    item.innerText = `${killer === myId ? 'شما' : killer} 🔫 ${victim === myId ? 'شما' : victim}`;
+    feed.appendChild(item);
+    setTimeout(() => item.remove(), 4000);
+    if(killer === myId) {
+        playerScore++;
+        document.getElementById('score-val').innerText = playerScore;
+    }
+}
+
+function shoot() {
+    if (isDead || isReloading) return;
+    const now = Date.now();
+    const config = WEAPONS_CONFIG[currentWeapon];
+    if (now - lastFireTime < config.fireRate) return;
+    if (currentAmmo <= 0) {
+        document.getElementById('reload-prompt').style.display = 'block';
+        return;
+    }
+
+    lastFireTime = now;
+    currentAmmo--;
+    updateAmmoDisplay();
+    playSound('shoot');
+
+    muzzleLight.intensity = 5;
+    setTimeout(() => muzzleLight.intensity = 0, 50);
+
+    // Raycasting برای شلیک
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+
+    const targets = [];
+    Object.keys(remotePlayers).forEach(id => {
+        const p = remotePlayers[id];
+        if (p) {
+            p.traverse(child => {
+                if (child.isMesh) {
+                    child.userData.ownerId = id;
+                    targets.push(child);
+                }
+            });
+        }
+    });
+
+    const intersects = raycaster.intersectObjects(targets);
+    if (intersects.length > 0) {
+        const hit = intersects[0];
+        const targetId = hit.object.userData.ownerId;
+        const isHead = hit.object.userData.isHead;
+        const damage = isHead ? config.dmgHead : config.dmgBody;
+
+        playSound('hit', isHead);
+        const crosshair = document.getElementById('crosshair');
+        crosshair.classList.add('hit');
+        setTimeout(() => crosshair.classList.remove('hit'), 150);
+
+        broadcastAll({ type: 'hit', target: targetId, dmg: damage, attacker: myId });
+    }
+}
+
+function updateAmmoDisplay() {
+    document.getElementById('ammo-val').innerText = `${currentAmmo}/${WEAPONS_CONFIG[currentWeapon].clipSize}`;
+}
 
 function reloadWeapon() {
-    if (isReloading) return; isReloading = true; playSound('reload'); document.getElementById('reload-prompt').style.display = 'none';
-    setTimeout(() => { currentAmmo = maxAmmo; document.getElementById('ammo-val').innerText = `${currentAmmo}/${maxAmmo}`; isReloading = false; }, WEAPONS_CONFIG[currentWeapon].reloadTime);
+    if (isReloading) return;
+    isReloading = true;
+    playSound('reload');
+    document.getElementById('reload-prompt').style.display = 'none';
+    setTimeout(() => {
+        currentAmmo = WEAPONS_CONFIG[currentWeapon].clipSize;
+        updateAmmoDisplay();
+        isReloading = false;
+    }, WEAPONS_CONFIG[currentWeapon].reloadTime);
 }
 
-function fireWeapon() {
-    if (isReloading || isDead) return;
-    const now = performance.now(), cfg = WEAPONS_CONFIG[currentWeapon];
-    if (now - lastFireTime < cfg.fireRate) return;
-    if (currentAmmo <= 0) { document.getElementById('reload-prompt').style.display = 'block'; return; }
-    
-    lastFireTime = now; currentAmmo--; document.getElementById('ammo-val').innerText = `${currentAmmo}/${maxAmmo}`; playSound('shoot');
-    
-    if (localWeaponMesh) { localWeaponMesh.position.z += 0.15; pitchObject.rotation.x += 0.02; }
-    if (muzzleLight) { muzzleLight.intensity = 4.0; setTimeout(() => { if (muzzleLight) muzzleLight.intensity = 0; }, 60); }
+function setupControls() {
+    document.addEventListener('keydown', e => {
+        if (e.code === 'KeyW') moveForward = true;
+        if (e.code === 'KeyS') moveBackward = true;
+        if (e.code === 'KeyA') moveLeft = true;
+        if (e.code === 'KeyD') moveRight = true;
+        if (e.code === 'KeyR') reloadWeapon();
+        if (e.code === 'Space') triggerJump();
+    });
+    document.addEventListener('keyup', e => {
+        if (e.code === 'KeyW') moveForward = false;
+        if (e.code === 'KeyS') moveBackward = false;
+        if (e.code === 'KeyA') moveLeft = false;
+        if (e.code === 'KeyD') moveRight = false;
+    });
 
-    const raycaster = new THREE.Raycaster(); raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-    let wallIntersects = raycaster.intersectObjects(wallMeshes);
-    let maxDist = wallIntersects.length > 0 ? wallIntersects[0].distance : 1000;
-    let targets = Object.keys(remotePlayers).map(id => ({ id: id, mesh: remotePlayers[id].mesh }));
-    let intersects = raycaster.intersectObjects(targets.map(t => t.mesh), true);
-    
-    if (intersects.length > 0) {
-        let hitDist = intersects[0].distance;
-        let effectiveRange = MAP_SIZE * cfg.maxRange;
-        if (hitDist <= effectiveRange && (wallIntersects.length === 0 || hitDist < maxDist)) {
-            let hitObj = intersects[0].object;
-            let targetId = null;
-            for (let id in remotePlayers) {
-                if (remotePlayers[id].mesh === hitObj || remotePlayers[id].mesh.children.includes(hitObj) || hitObj.parent === remotePlayers[id].mesh || hitObj.parent.parent === remotePlayers[id].mesh) { targetId = id; break; }
+    window.addEventListener('mousedown', (e) => {
+        if (isRunning && e.button === 0) shoot();
+    });
+
+    // Touch Controls
+    const fireBtn = document.getElementById('fire-btn');
+    fireBtn.addEventListener('touchstart', (e) => { e.preventDefault(); shoot(); });
+
+    setupJoystick();
+}
+
+function setupJoystick() {
+    const zone = document.getElementById('joystick-zone');
+    const knob = document.getElementById('joystick-knob');
+    let touchId = null;
+
+    zone.addEventListener('touchstart', e => {
+        const touch = e.changedTouches[0];
+        touchId = touch.identifier;
+    });
+
+    zone.addEventListener('touchmove', e => {
+        for(let touch of e.changedTouches) {
+            if(touch.identifier === touchId) {
+                const rect = zone.getBoundingClientRect();
+                const x = touch.clientX - (rect.left + rect.width/2);
+                const y = touch.clientY - (rect.top + rect.height/2);
+                const dist = Math.min(Math.hypot(x, y), 40);
+                const angle = Math.atan2(y, x);
+                
+                knob.style.transform = `translate(${Math.cos(angle)*dist}px, ${Math.sin(angle)*dist}px)`;
+                joystickVector.x = Math.cos(angle) * (dist / 40);
+                joystickVector.y = Math.sin(angle) * (dist / 40);
             }
-            if (targetId) {
-                let isHead = hitObj.userData && hitObj.userData.isHead === true;
-                playSound('hit', isHead);
-                let hitMsg = { type: 'hit', targetId: targetId, dmg: isHead ? cfg.dmgHead : cfg.dmgBody, attackerId: myId };
-                Object.values(connections).forEach(c => { if (c.open) c.send(hitMsg); });
-            }
         }
-    }
-    if (currentAmmo === 0) document.getElementById('reload-prompt').style.display = 'block';
+    });
+
+    const reset = () => {
+        knob.style.transform = `translate(0px, 0px)`;
+        joystickVector = { x: 0, y: 0 };
+    };
+    zone.addEventListener('touchend', reset);
+    zone.addEventListener('touchcancel', reset);
 }
 
-let joystickTouchId = null, cameraTouchId = null, joystickActive = false;
-let joystickMove = { x: 0, y: 0 }, joystickCenter = { x: 0, y: 0 }, touchLookPrev = { x: 0, y: 0 };
-const joyZone = document.getElementById('joystick-zone'), joyKnob = document.getElementById('joystick-knob');
-
-joyZone.addEventListener('touchstart', e => {
-    e.preventDefault();
-    for(let i=0; i<e.changedTouches.length; i++) {
-        let t = e.changedTouches[i];
-        if (joystickTouchId === null) {
-            joystickTouchId = t.identifier; joystickActive = true;
-            let rect = joyZone.getBoundingClientRect();
-            joystickCenter.x = rect.left + rect.width / 2; joystickCenter.y = rect.top + rect.height / 2;
-            updateJoystick(t);
-        }
-    }
-}, {passive: false});
-
-window.addEventListener('touchstart', e => {
-    if (e.target.closest('.touch-zone') || e.target.closest('.top-action-btn') || e.target.closest('#hud')) return;
-    for(let i=0; i<e.changedTouches.length; i++) {
-        let t = e.changedTouches[i];
-        if (t.clientX > window.innerWidth / 2 && t.identifier !== joystickTouchId && cameraTouchId === null) { cameraTouchId = t.identifier; touchLookPrev.x = t.clientX; touchLookPrev.y = t.clientY; }
-    }
-}, {passive: false});
-
-window.addEventListener('touchmove', e => {
-    for(let i=0; i<e.changedTouches.length; i++) {
-        let t = e.changedTouches[i];
-        if (joystickActive && t.identifier === joystickTouchId) updateJoystick(t);
-        if (t.identifier === cameraTouchId) {
-            let dx = t.clientX - touchLookPrev.x, dy = t.clientY - touchLookPrev.y;
-            touchLookPrev.x = t.clientX; touchLookPrev.y = t.clientY;
-            yawObject.rotation.y -= dx * 0.005; pitchObject.rotation.x -= dy * 0.005;
-            pitchObject.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitchObject.rotation.x));
-        }
-    }
-}, {passive: false});
-
-function handleTouchEnd(e) {
-    for(let i=0; i<e.changedTouches.length; i++) {
-        let t = e.changedTouches[i];
-        if (t.identifier === joystickTouchId) { joystickActive = false; joystickTouchId = null; joystickMove.x = 0; joystickMove.y = 0; joyKnob.style.transform = `translate(0px, 0px)`; }
-        if (t.identifier === cameraTouchId) cameraTouchId = null;
+function triggerJump() {
+    if (isGrounded && !isDead) {
+        playerVelocityY = 12;
+        isGrounded = false;
     }
 }
-window.addEventListener('touchend', handleTouchEnd); window.addEventListener('touchcancel', handleTouchEnd);
 
-function updateJoystick(touch) {
-    let dx = touch.clientX - joystickCenter.x, dy = touch.clientY - joystickCenter.y;
-    let dist = Math.sqrt(dx * dx + dy * dy), maxDist = 45;
-    if (dist > maxDist) { dx = (dx / dist) * maxDist; dy = (dy / dist) * maxDist; }
-    joyKnob.style.transform = `translate(${dx}px, ${dy}px)`;
-    joystickMove.x = dx / maxDist; joystickMove.y = dy / maxDist;
+function toggleCrouch() {
+    isCrouched = !isCrouched;
+    yawObject.position.y = isCrouched ? PLAYER_HEIGHT_CROUCH : PLAYER_HEIGHT_STAND;
 }
 
-let fireBtn = document.getElementById('fire-btn');
-fireBtn.addEventListener('touchstart', e => { e.preventDefault(); e.stopPropagation(); fireWeapon(); if(WEAPONS_CONFIG[currentWeapon].auto) autoFireInterval = setInterval(fireWeapon, WEAPONS_CONFIG[currentWeapon].fireRate); }, {passive: false});
-fireBtn.addEventListener('touchend', e => { e.preventDefault(); e.stopPropagation(); if(autoFireInterval) { clearInterval(autoFireInterval); autoFireInterval = null; } }, {passive: false});
+function cycleCrosshairStyle() {
+    crosshairStyleIndex = (crosshairStyleIndex + 1) % 3;
+    const c = document.getElementById('crosshair');
+    if(crosshairStyleIndex === 0) c.style.borderRadius = '50%';
+    else if(crosshairStyleIndex === 1) c.style.borderRadius = '0px';
+    else c.style.borderRadius = '2px';
+}
 
-let keys = { w: false, a: false, s: false, d: false };
-window.addEventListener('keydown', e => { let k = e.key.toLowerCase(); if(keys.hasOwnProperty(k)) keys[k] = true; if(k===' ') triggerJump(); if(k==='c') toggleCrouch(); if(k==='r') reloadWeapon(); });
-window.addEventListener('keyup', e => { let k = e.key.toLowerCase(); if(keys.hasOwnProperty(k)) keys[k] = false; });
-document.getElementById('game-container').addEventListener('click', () => { if(!isTouch) document.body.requestPointerLock(); });
-document.addEventListener('mousemove', e => { if (document.pointerLockElement === document.body) { yawObject.rotation.y -= e.movementX * 0.002; pitchObject.rotation.x -= e.movementY * 0.002; pitchObject.rotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, pitchObject.rotation.x)); } });
-document.addEventListener('mousedown', e => { if (!isTouch && document.pointerLockElement === document.body) { if(e.button === 0) { fireWeapon(); if(WEAPONS_CONFIG[currentWeapon].auto) autoFireInterval = setInterval(fireWeapon, WEAPONS_CONFIG[currentWeapon].fireRate); } if(e.button === 2) toggleZoom(); } });
-document.addEventListener('mouseup', e => { if (e.button === 0 && autoFireInterval) { clearInterval(autoFireInterval); autoFireInterval = null; } });
-window.addEventListener('contextmenu', e => e.preventDefault());
+function toggleShopModal() {
+    const s = document.getElementById('shop-modal');
+    s.style.display = s.style.display === 'none' ? 'flex' : 'none';
+}
 
-window.addEventListener('blur', () => {
-    if (autoFireInterval) { clearInterval(autoFireInterval); autoFireInterval = null; }
-});
+function selectWeapon(w) {
+    currentWeapon = w;
+    document.getElementById('weapon-display').innerText = WEAPONS_CONFIG[w].name;
+    currentAmmo = WEAPONS_CONFIG[w].clipSize;
+    updateAmmoDisplay();
+    toggleShopModal();
+}
 
 function gameLoop() {
     if (!isRunning) return;
-    let currentHeight = isCrouched ? PLAYER_HEIGHT_CROUCH : PLAYER_HEIGHT_STAND;
-    let speed = PLAYER_SPEED_WALK * 0.016;
+    requestAnimationFrame(gameLoop);
 
-    if (localWeaponMesh) localWeaponMesh.position.z = THREE.MathUtils.lerp(localWeaponMesh.position.z, -1.1, 0.15);
+    const delta = 0.016;
 
-    let moveX = joystickMove.x, moveY = joystickMove.y;
-    if (keys.w) moveY -= 1; if (keys.s) moveY += 1; if (keys.a) moveX -= 1; if (keys.d) moveX += 1;
+    if (!isDead) {
+        // Gravity & Movement
+        playerVelocityY += gravity * delta;
+        yawObject.position.y += playerVelocityY * delta;
 
-    if (moveX !== 0 || moveY !== 0) {
-        let moveDir = new THREE.Vector3();
-        let forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yawObject.rotation.y);
-        let right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yawObject.rotation.y);
-        moveDir.addScaledVector(forward, -moveY); moveDir.addScaledVector(right, moveX); moveDir.normalize();
-        
-        let nextPos = yawObject.position.clone().addScaledVector(moveDir, speed);
-        let testBox = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(nextPos.x, currentHeight / 2, nextPos.z), new THREE.Vector3(2.5, currentHeight, 2.5));
-        
-        let collides = false;
-        for (let w of walls) { if (testBox.intersectsBox(w)) { collides = true; break; } }
-        
-        if (!collides) { yawObject.position.copy(nextPos); } 
-        else {
-            let nx = yawObject.position.clone(); nx.x += moveDir.x * speed;
-            let bx = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(nx.x, currentHeight / 2, nx.z), new THREE.Vector3(2.5, currentHeight, 2.5));
-            let colX = false; for(let w of walls) { if(bx.intersectsBox(w)) { colX = true; break; } }
-            if(!colX) yawObject.position.x = nx.x;
-            
-            let nz = yawObject.position.clone(); nz.z += moveDir.z * speed;
-            let bz = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(nz.x, currentHeight / 2, nz.z), new THREE.Vector3(2.5, currentHeight, 2.5));
-            let colZ = false; for(let w of walls) { if(bz.intersectsBox(w)) { colZ = true; break; } }
-            if(!colZ) yawObject.position.z = nz.z;
+        if (yawObject.position.y <= (isCrouched ? PLAYER_HEIGHT_CROUCH : PLAYER_HEIGHT_STAND)) {
+            yawObject.position.y = isCrouched ? PLAYER_HEIGHT_CROUCH : PLAYER_HEIGHT_STAND;
+            playerVelocityY = 0;
+            isGrounded = true;
+        }
+
+        let moveX = joystickVector.x, moveZ = joystickVector.y;
+        if (moveForward) moveZ = -1;
+        if (moveBackward) moveZ = 1;
+        if (moveLeft) moveX = -1;
+        if (moveRight) moveX = 1;
+
+        if (moveX !== 0 || moveZ !== 0) {
+            const speed = PLAYER_SPEED_WALK * delta;
+            yawObject.translateX(moveX * speed);
+            yawObject.translateZ(moveZ * speed);
+        }
+
+        // ارسال Position حتی پس از کشتن بقیه بدون وقفه
+        const now = Date.now();
+        if (now - lastPosSendTime > 40) { // 25 FPS Network Loop
+            broadcastAll({
+                type: 'pos',
+                id: myId,
+                x: yawObject.position.x,
+                y: yawObject.position.y,
+                z: yawObject.position.z,
+                ry: yawObject.rotation.y,
+                hp: playerHealth
+            });
+            lastPosSendTime = now;
         }
     }
 
-    playerVelocityY += gravity * 0.016; yawObject.position.y += playerVelocityY * 0.016;
-    if (yawObject.position.y < currentHeight) { yawObject.position.y = currentHeight; playerVelocityY = 0; isGrounded = true; }
-
-    let now = performance.now();
-    if (!isDead && playerHealth < 100) { if (now - lastDamageTime > 20000) { playerHealth = Math.min(100, playerHealth + 10 * 0.016); document.getElementById('hp-val').innerText = Math.floor(playerHealth); } }
-
-    if (now - lastPosSendTime > 100) {
-        lastPosSendTime = now;
-        let myData = { type: 'pos', id: myId, x: yawObject.position.x, y: yawObject.position.y, z: yawObject.position.z, hp: playerHealth };
-        Object.values(connections).forEach(c => { if(c.open) c.send(myData); });
-    }
-
-    let walkCycle = now * 0.015;
-    Object.values(remotePlayers).forEach(rp => {
-        let moveDir = new THREE.Vector3().subVectors(rp.targetPos, rp.mesh.position);
-        if (moveDir.lengthSq() > 0.0001) rp.mesh.rotation.y = Math.atan2(moveDir.x, moveDir.z);
-        rp.mesh.position.lerp(rp.targetPos, 0.12);
-
-        let moved = rp.mesh.position.distanceTo(rp.lastPos) > 0.001;
-        if (moved && rp.mesh.userData.leftLeg && rp.mesh.userData.rightLeg) {
-            let legAngle = Math.sin(walkCycle) * 0.6;
-            rp.mesh.userData.leftLeg.rotation.x = legAngle; rp.mesh.userData.rightLeg.rotation.x = -legAngle;
-        } else if (rp.mesh.userData.leftLeg && rp.mesh.userData.rightLeg) {
-            rp.mesh.userData.leftLeg.rotation.x = 0; rp.mesh.userData.rightLeg.rotation.x = 0;
-        }
-        rp.lastPos.copy(rp.mesh.position);
-    });
-
-    renderer.render(scene, camera); requestAnimationFrame(gameLoop);
+    renderer.render(scene, camera);
 }
 </script>
 </body>
