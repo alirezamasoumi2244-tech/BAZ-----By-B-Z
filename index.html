@@ -17,14 +17,14 @@
             background-color: #000000; display: flex; justify-content: center; align-items: center;
             z-index: 9999;
             animation: fadeOutScreen 0.5s ease forwards;
-            animation-delay: 2.5s;
+            animation-delay: 3.5s;
         }
         .gaming-logo {
             color: #ef4444; font-family: Tahoma, sans-serif; font-size: 3rem; font-weight: bold;
             text-align: center; line-height: 1.2; text-shadow: 0 0 20px rgba(239, 68, 68, 0.7);
             opacity: 0;
             animation: textAppear 1s ease forwards;
-            animation-delay: 0.5s;
+            animation-delay: 1s;
         }
         @keyframes textAppear {
             0% { opacity: 0; transform: scale(0.9); }
@@ -80,6 +80,7 @@
         }
         #jump-btn { left: 15px; color: #f59e0b; }
         #crouch-btn { left: 70px; }
+        .top-action-btn.active { background: #38bdf8; color: #0f172a; }
 
         #voice-toggle-btn {
             position: absolute; top: 15px; right: 15px; width: auto; padding: 0 10px;
@@ -116,6 +117,7 @@
             border-radius: 50%; display: none; justify-content: center; align-items: center;
             font-size: 11px; font-weight: bold; z-index: 15; pointer-events: auto; color: #f59e0b;
         }
+        #zoom-btn.active { background: #f59e0b; color: #0f172a; }
 
         #mobile-reload-btn {
             position: absolute; bottom: 35px; left: 155px; width: 55px; height: 55px;
@@ -271,7 +273,7 @@
 <div id="game-over" class="menu-overlay" style="display: none;">
     <div class="menu-box">
         <h1 style="color: #ef4444;">مردید!</h1>
-        <button class="btn" onclick="respawnPlayer()">اسپاون مجدد</button>
+        <button class="btn" onclick="location.reload()">تلاش مجدد</button>
     </div>
 </div>
 
@@ -280,37 +282,40 @@ let peer = null, isHost = false, myId = '';
 let connections = {}, scene, camera, renderer, yawObject, pitchObject;
 let isRunning = false, playerHealth = 100, playerScore = 0;
 let walls = [], wallMeshes = [], remotePlayers = {}, isDead = false;
+let lastDamageTime = 0;
 
 let playerVelocityY = 0, isGrounded = true, isCrouched = false;
 const gravity = -30, PLAYER_SPEED_WALK = 27;
 let MAP_SIZE = 1125;
 const PLAYER_HEIGHT_STAND = 7.8, PLAYER_HEIGHT_CROUCH = 3.9;
 
-let currentWeapon = 'pistol';
-let isZoomed = false, userGraphicsQuality = 'high';
+let currentWeapon = 'pistol', akUnlocked = false, sniperUnlocked = false;
+let autoFireInterval = null, isZoomed = false, userGraphicsQuality = 'high';
 let localWeaponMesh = null, muzzleLight = null;
 
+let localAudioStream = null, isVoiceEnabled = false, remoteAudioElements = {};
 let allRoomPeers = new Set();
+let activeVoiceCalls = {};
+
 let currentAmmo = 12, maxAmmo = 12, isReloading = false;
 let crosshairStyleIndex = 0, lastFireTime = 0, lastPosSendTime = 0;
 
-let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
-let joystickVector = { x: 0, y: 0 };
+let isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
 
 const peerConfig = { config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] } };
 
 const WEAPONS_CONFIG = {
-    pistol: { name: 'کلت', fireRate: 350, auto: false, dmgBody: 20, dmgHead: 50, clipSize: 12, reloadTime: 1200 },
-    ak:     { name: 'AK رگباری', fireRate: 150, auto: true, dmgBody: 15, dmgHead: 35, clipSize: 30, reloadTime: 1800 },
-    sniper: { name: 'اسنایپر', fireRate: 800, auto: false, dmgBody: 70, dmgHead: 100, clipSize: 5, reloadTime: 2500 }
+    pistol: { name: 'کلت', fireRate: 350, auto: false, dmgBody: 10, dmgHead: 50, clipSize: 12, reloadTime: 1200, maxRange: 0.25 },
+    ak:     { name: 'AK رگباری', fireRate: 150, auto: true, dmgBody: 5, dmgHead: 35, clipSize: 30, reloadTime: 1800, maxRange: 1/6 },
+    sniper: { name: 'اسنایپر', fireRate: 800, auto: false, dmgBody: 50, dmgHead: 100, clipSize: 5, reloadTime: 2500, maxRange: 0.5 }
 };
 
 function getValidSpawnPosition() {
     const testBox = new THREE.Box3();
-    let valid = false, x = 0, z = 0, attempts = 0, limit = MAP_SIZE * 0.4;
+    let valid = false, x = 0, z = 0, attempts = 0, limit = MAP_SIZE * 0.45;
     const safeSize = new THREE.Vector3(3.5, PLAYER_HEIGHT_STAND, 3.5);
 
-    while (!valid && attempts < 500) {
+    while (!valid && attempts < 1000) {
         attempts++;
         x = (Math.random() - 0.5) * limit * 2;
         z = (Math.random() - 0.5) * limit * 2;
@@ -359,12 +364,11 @@ function createHealthBarSprite() {
     const texture = new THREE.CanvasTexture(canvas);
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture }));
     sprite.scale.set(4.5, 0.6, 1);
-    sprite.position.y = 9.5;
+    sprite.position.y = 8.5;
     return { sprite, canvas, ctx, texture };
 }
 
 function updateHealthBar(hpData, hp) {
-    if(!hpData) return;
     const { ctx, canvas, texture } = hpData;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
@@ -404,12 +408,17 @@ function createDetailedPlayerModel() {
     gun.position.set(1.6, 2.6, 1.6);
     group.add(gun);
 
-    const hpData = createHealthBarSprite();
-    group.add(hpData.sprite);
+    const legMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6 });
+    const leftLeg = new THREE.Mesh(new THREE.BoxGeometry(0.8, 3.5, 0.8), legMat);
+    leftLeg.position.set(-0.8, -0.2, 0);
+    group.add(leftLeg);
+
+    const rightLeg = new THREE.Mesh(new THREE.BoxGeometry(0.8, 3.5, 0.8), legMat);
+    rightLeg.position.set(0.8, -0.2, 0);
+    group.add(rightLeg);
 
     group.scale.set(1.3, 1.3, 1.3);
-    group.userData = { head, body, hpData, hp: 100 };
-    updateHealthBar(hpData, 100);
+    group.userData = { leftLeg, rightLeg };
     return group;
 }
 
@@ -423,6 +432,10 @@ function createTexture(quality, isWall) {
         ctx.fillStyle = '#1e293b'; ctx.fillRect(0, 0, size, size);
         ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = size / 64;
         ctx.strokeRect(size * 0.05, size * 0.05, size * 0.9, size * 0.9);
+        if(quality !== 'low') {
+            ctx.fillStyle = 'rgba(56, 189, 248, 0.15)';
+            ctx.fillRect(size * 0.1, size * 0.1, size * 0.8, size * 0.8);
+        }
     } else {
         ctx.fillStyle = '#0f172a'; ctx.fillRect(0, 0, size, size);
         ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 3;
@@ -442,7 +455,7 @@ function initEngine() {
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x090d16);
-    scene.fog = new THREE.FogExp2(0x090d16, 0.001);
+    scene.fog = new THREE.FogExp2(0x090d16, userGraphicsQuality === 'high' ? 0.001 : 0.0015);
 
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
     renderer = new THREE.WebGLRenderer({ antialias: userGraphicsQuality !== 'low', powerPreference: "high-performance" });
@@ -450,22 +463,51 @@ function initEngine() {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.1;
 
+    if (userGraphicsQuality !== 'low') { 
+        renderer.shadowMap.enabled = true; 
+        renderer.shadowMap.type = userGraphicsQuality === 'high' ? THREE.PCFSoftShadowMap : THREE.BasicShadowMap; 
+    }
     container.appendChild(renderer.domElement);
 
-    const hemiLight = new THREE.HemisphereLight(0x38bdf8, 0x0f172a, 1.5);
+    const hemiLight = new THREE.HemisphereLight(0x38bdf8, 0x0f172a, userGraphicsQuality === 'high' ? 1.8 : 1.2);
     hemiLight.position.set(0, 500, 0);
     scene.add(hemiLight);
 
-    const dirLight = new THREE.DirectionalLight(0xfffbe0, 1.8);
+    const dirLight = new THREE.DirectionalLight(0xfffbe0, userGraphicsQuality === 'high' ? 2.2 : 1.5);
     dirLight.position.set(300, 600, 200);
+    if (userGraphicsQuality !== 'low') {
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = userGraphicsQuality === 'high' ? 2048 : 1024;
+        dirLight.shadow.mapSize.height = userGraphicsQuality === 'high' ? 2048 : 1024;
+        dirLight.shadow.bias = -0.0001;
+    }
     scene.add(dirLight);
 
+    if (userGraphicsQuality !== 'low') {
+        const pointLight1 = new THREE.PointLight(0x38bdf8, 3, 250);
+        pointLight1.position.set(0, 30, 0);
+        scene.add(pointLight1);
+
+        const pointLight2 = new THREE.PointLight(0xef4444, 3, 250);
+        pointLight2.position.set(-250, 30, -250);
+        scene.add(pointLight2);
+
+        const pointLight3 = new THREE.PointLight(0xf59e0b, 3, 250);
+        pointLight3.position.set(250, 30, 250);
+        scene.add(pointLight3);
+    }
+
     const floorTexture = createTexture(userGraphicsQuality, false);
-    floorTexture.repeat.set(40, 40);
+    let scaleFactor = MAP_SIZE / 750;
+    floorTexture.repeat.set(Math.floor(30 * scaleFactor), Math.floor(30 * scaleFactor));
     
-    const floorMat = new THREE.MeshStandardMaterial({ map: floorTexture, roughness: 0.2, metalness: 0.4 });
+    const floorMat = userGraphicsQuality === 'low' 
+        ? new THREE.MeshBasicMaterial({ map: floorTexture }) 
+        : new THREE.MeshStandardMaterial({ map: floorTexture, roughness: 0.15, metalness: 0.5 });
+    
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(MAP_SIZE, MAP_SIZE), floorMat);
     floor.rotation.x = -Math.PI / 2;
+    if (userGraphicsQuality !== 'low') floor.receiveShadow = true;
     scene.add(floor);
 
     const visualWalls = new THREE.Group();
@@ -474,17 +516,37 @@ function initEngine() {
     const BASE_MAZE = [
         [0, 40, -565, 1150, 80, 25], [0, 40, 565, 1150, 80, 25], [-565, 40, 0, 25, 80, 1150], [565, 40, 0, 25, 80, 1150],
         [-300, 14, -300, 90, 28, 150], [300, 14, -300, 90, 28, 150], [-300, 14, 300, 90, 28, 150], [300, 14, 300, 90, 28, 150],
-        [0, 14, -225, 270, 28, 30], [0, 14, 225, 270, 28, 30], [-225, 14, 0, 30, 28, 270], [225, 14, 0, 30, 28, 270]
+        [0, 14, -225, 270, 28, 30], [0, 14, 225, 270, 28, 30], [-225, 14, 0, 30, 28, 270], [225, 14, 0, 30, 28, 270],
+        [-150, 14, -400, 120, 28, 25], [150, 14, -400, 120, 28, 25], [-150, 14, 400, 120, 28, 25], [150, 14, 400, 120, 28, 25],
+        [-400, 14, -150, 25, 28, 120], [400, 14, -150, 25, 28, 120], [-400, 14, 150, 25, 28, 120], [400, 14, 150, 25, 28, 120],
+        [-250, 14, -100, 40, 28, 80], [250, 14, 100, 40, 28, 80], [-100, 14, -250, 80, 28, 40], [100, 14, 250, 80, 28, 40],
+        [0, 14, 0, 80, 28, 80], [-100, 14, -100, 50, 28, 50], [100, 14, 100, 50, 28, 50], [-100, 14, 100, 50, 28, 50], [100, 14, -100, 50, 28, 50],
+        [0, 14, -450, 150, 28, 20], [0, 14, 450, 150, 28, 20], [-450, 14, 0, 20, 28, 150], [450, 14, 0, 20, 28, 150],
+        [-200, 14, -480, 80, 28, 20], [200, 14, -480, 80, 28, 20], [-200, 14, 480, 80, 28, 20], [200, 14, 480, 80, 28, 20],
+        [-480, 14, -200, 20, 28, 80], [-480, 14, 200, 20, 28, 80], [480, 14, -200, 20, 28, 80], [480, 14, 200, 20, 28, 80],
+        [-350, 14, -350, 40, 28, 40], [350, 14, -350, 40, 28, 40], [-350, 14, 350, 40, 28, 40], [350, 14, 350, 40, 28, 40],
+        [-180, 14, -180, 30, 28, 30], [180, 14, -180, 30, 28, 30], [-180, 14, 180, 30, 28, 30], [180, 14, 180, 30, 28, 30],
+        [0, 14, -350, 100, 28, 20], [0, 14, 350, 100, 28, 20], [-350, 14, 0, 20, 28, 100], [350, 14, 0, 20, 28, 100],
+        [-50, 14, -120, 60, 28, 15], [50, 14, 120, 60, 28, 15], [-120, 14, 50, 15, 28, 60], [120, 14, -50, 15, 28, 60],
+        [-280, 14, -200, 20, 28, 80], [280, 14, 200, 20, 28, 80], [-200, 14, -280, 80, 28, 20], [200, 14, 280, 80, 28, 20],
+        [-280, 14, 200, 20, 28, 80], [280, 14, -200, 20, 28, 80], [-200, 14, 280, 80, 28, 20], [200, 14, -280, 80, 28, 20],
+        [-100, 14, -480, 40, 28, 20], [100, 14, -480, 40, 28, 20], [-100, 14, 480, 40, 28, 20], [100, 14, 480, 40, 28, 20],
+        [-480, 14, -100, 20, 28, 40], [480, 14, -100, 20, 28, 40], [-480, 14, 100, 20, 28, 40], [480, 14, 100, 20, 28, 40],
+        [-140, 14, -140, 50, 28, 20], [140, 14, 140, 50, 28, 20], [-140, 14, 140, 20, 28, 50], [140, 14, -140, 20, 28, 50],
+        [-320, 14, 0, 30, 28, 90], [320, 14, 0, 30, 28, 90], [0, 14, -320, 90, 28, 30], [0, 14, 320, 90, 28, 30]
     ];
     
-    const wallMat = new THREE.MeshStandardMaterial({ map: createTexture(userGraphicsQuality, true), roughness: 0.2 });
+    const wallMat = userGraphicsQuality === 'low' 
+        ? new THREE.MeshBasicMaterial({ map: createTexture(userGraphicsQuality, true) }) 
+        : new THREE.MeshStandardMaterial({ map: createTexture(userGraphicsQuality, true), roughness: 0.2, metalness: 0.3 });
 
     walls = [];
     wallMeshes = [];
     BASE_MAZE.forEach(b => {
         const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), wallMat);
-        mesh.position.set(b[0], b[1], b[2]);
-        mesh.scale.set(b[3], b[4], b[5]);
+        mesh.position.set(b[0] * (scaleFactor * 0.8), b[1], b[2] * (scaleFactor * 0.8));
+        mesh.scale.set(b[3] * (scaleFactor * 0.8), b[4], b[5] * (scaleFactor * 0.8));
+        if (userGraphicsQuality !== 'low') { mesh.castShadow = true; mesh.receiveShadow = true; }
         visualWalls.add(mesh);
         wallMeshes.push(mesh);
         walls.push(new THREE.Box3().setFromCenterAndSize(mesh.position, mesh.scale));
@@ -492,13 +554,12 @@ function initEngine() {
 
     yawObject = new THREE.Object3D(); pitchObject = new THREE.Object3D();
     scene.add(yawObject); yawObject.add(pitchObject); pitchObject.add(camera);
+    pitchObject.rotation.x = 0.35;
 
     const gunGroup = new THREE.Group();
-    gunGroup.add(new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.5, 2.2), new THREE.MeshStandardMaterial({ color: 0x334155 })));
+    gunGroup.add(new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.5, 2.2), new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.9, roughness: 0.1 })));
     muzzleLight = new THREE.PointLight(0xf59e0b, 0, 20); muzzleLight.position.set(0, 0.15, -1.5); gunGroup.add(muzzleLight);
     localWeaponMesh = gunGroup; localWeaponMesh.position.set(0.55, -0.55, -1.1); camera.add(localWeaponMesh);
-
-    setupControls();
 }
 
 function setGraphicsQuality(q) { 
@@ -517,6 +578,7 @@ function createRoom() {
         document.getElementById('host-wait-menu').style.display = 'flex';
         document.getElementById('my-room-code').innerText = id;
     });
+    peer.on('call', handleVoiceCall);
     peer.on('connection', conn => {
         connections[conn.peer] = conn; 
         allRoomPeers.add(conn.peer);
@@ -539,70 +601,12 @@ function joinRoom() {
             document.getElementById('client-wait-menu').style.display = 'flex';
             document.getElementById('connected-room-code').innerText = code;
         });
-    });
-}
-
-function setupConnEvents(conn) {
-    conn.on('data', data => {
-        try {
-            if (data.type === 'start') {
-                startGame();
-            } else if (data.type === 'pos') {
-                if (!remotePlayers[data.id]) {
-                    remotePlayers[data.id] = createDetailedPlayerModel();
-                    scene.add(remotePlayers[data.id]);
-                }
-                const p = remotePlayers[data.id];
-                p.position.set(data.x, data.y, data.z);
-                p.rotation.y = data.ry;
-                if(data.hp !== undefined) {
-                    p.userData.hp = data.hp;
-                    updateHealthBar(p.userData.hpData, data.hp);
-                }
-            } else if (data.type === 'hit') {
-                if (data.target === myId) {
-                    takeDamage(data.dmg, data.attacker);
-                }
-            } else if (data.type === 'kill') {
-                addKillFeed(data.killer, data.victim);
-            }
-
-            // Host Relaying (ارسال مجدد پیام‌ها برای سایر بازیکنان)
-            if (isHost) {
-                broadcastExcept(data, conn.peer);
-            }
-        } catch(e) {
-            console.error("Network Packet Error:", e);
-        }
-    });
-
-    conn.on('close', () => {
-        if (remotePlayers[conn.peer]) {
-            scene.remove(remotePlayers[conn.peer]);
-            delete remotePlayers[conn.peer];
-        }
-        delete connections[conn.peer];
-    });
-}
-
-function broadcastExcept(data, senderId) {
-    Object.keys(connections).forEach(id => {
-        if (id !== senderId && connections[id] && connections[id].open) {
-            connections[id].send(data);
-        }
-    });
-}
-
-function broadcastAll(data) {
-    Object.keys(connections).forEach(id => {
-        if (connections[id] && connections[id].open) {
-            connections[id].send(data);
-        }
+        peer.on('call', handleVoiceCall);
     });
 }
 
 function hostStartGame() {
-    broadcastAll({ type: 'start' });
+    broadcast({ type: 'start' });
     startGame();
 }
 
@@ -610,259 +614,487 @@ function startGame() {
     document.getElementById('host-wait-menu').style.display = 'none';
     document.getElementById('client-wait-menu').style.display = 'none';
     document.getElementById('ui-layer').style.display = 'block';
-    if('ontouchstart' in window) document.getElementById('mobile-controls').style.display = 'block';
+    
+    if (isTouch) {
+        document.getElementById('mobile-controls').style.display = 'block';
+        initJoystick();
+    } else {
+        document.body.requestPointerLock();
+    }
     
     initEngine();
-    respawnPlayer();
-    isRunning = true;
-    requestAnimationFrame(gameLoop);
-}
-
-function respawnPlayer() {
-    document.getElementById('game-over').style.display = 'none';
-    const spawn = getValidSpawnPosition();
-    yawObject.position.set(spawn.x, PLAYER_HEIGHT_STAND, spawn.z);
-    playerHealth = 100;
-    isDead = false;
-    document.getElementById('hp-val').innerText = playerHealth;
-    document.getElementById('damage-overlay').style.boxShadow = 'none';
-}
-
-function takeDamage(amount, attackerId) {
-    if (isDead) return;
-    playerHealth -= amount;
-    document.getElementById('hp-val').innerText = Math.max(0, playerHealth);
+    broadcast({ type: 'join', id: myId });
     
-    document.getElementById('damage-overlay').style.boxShadow = 'inset 0 0 80px rgba(239, 68, 68, 0.8)';
-    setTimeout(() => { document.getElementById('damage-overlay').style.boxShadow = 'none'; }, 200);
-
-    if (playerHealth <= 0) {
-        isDead = true;
-        document.getElementById('game-over').style.display = 'flex';
-        broadcastAll({ type: 'kill', killer: attackerId, victim: myId });
-        addKillFeed(attackerId, myId);
-    }
+    let spawn = getValidSpawnPosition();
+    yawObject.position.set(spawn.x, PLAYER_HEIGHT_STAND, spawn.z);
+    
+    isRunning = true;
+    animate();
 }
 
-function addKillFeed(killer, victim) {
-    const feed = document.getElementById('killfeed');
-    const item = document.createElement('div');
-    item.className = 'killfeed-item';
-    item.innerText = `${killer === myId ? 'شما' : killer} 🔫 ${victim === myId ? 'شما' : victim}`;
-    feed.appendChild(item);
-    setTimeout(() => item.remove(), 4000);
-    if(killer === myId) {
-        playerScore++;
-        document.getElementById('score-val').innerText = playerScore;
+function setupConnEvents(conn) {
+    conn.on('data', data => {
+        try {
+            // رله کردن پیام‌ها توسط هاست (P2P Mesh Network)
+            if (isHost && data.type !== 'join') {
+                for (let id in connections) {
+                    if (id !== conn.peer && connections[id].open) connections[id].send(data);
+                }
+            }
+
+            if (data.type === 'start' && !isHost) {
+                startGame();
+            } 
+            else if (data.type === 'join') {
+                if (data.id !== myId && !remotePlayers[data.id]) {
+                    let mesh = createDetailedPlayerModel();
+                    let hpData = createHealthBarSprite();
+                    mesh.add(hpData.sprite);
+                    scene.add(mesh);
+                    remotePlayers[data.id] = { mesh, hpData, hp: 100 };
+                    
+                    if (isHost) {
+                        for (let id in remotePlayers) {
+                            if (id !== data.id) conn.send({ type: 'join', id: id });
+                        }
+                    }
+                }
+            } 
+            else if (data.type === 'pos') {
+                if (data.id !== myId && remotePlayers[data.id]) {
+                    let rp = remotePlayers[data.id];
+                    rp.mesh.position.set(data.x, data.y, data.z);
+                    rp.mesh.rotation.y = data.ry;
+                    
+                    let speed = Math.abs(data.vx) + Math.abs(data.vz);
+                    if (speed > 0.1) {
+                        let t = performance.now() * 0.015;
+                        rp.mesh.userData.leftLeg.rotation.x = Math.sin(t) * 0.5;
+                        rp.mesh.userData.rightLeg.rotation.x = Math.sin(t + Math.PI) * 0.5;
+                    } else {
+                        rp.mesh.userData.leftLeg.rotation.x = 0;
+                        rp.mesh.userData.rightLeg.rotation.x = 0;
+                    }
+                }
+            } 
+            else if (data.type === 'shoot') {
+                if (data.id !== myId && remotePlayers[data.id]) {
+                    playSound('shoot', false);
+                }
+            } 
+            else if (data.type === 'hit') {
+                if (data.targetId === myId && !isDead) {
+                    playerHealth -= data.damage;
+                    playSound('hit', data.isHeadshot);
+                    showDamageEffect();
+                    document.getElementById('hp-val').innerText = Math.max(0, playerHealth);
+                    
+                    if (playerHealth <= 0) {
+                        isDead = true;
+                        document.getElementById('game-over').style.display = 'flex';
+                        if (document.pointerLockElement) document.exitPointerLock();
+                        // اطلاع رسانی مرگ با ارسال آیدی قاتل و مقتول
+                        broadcast({ type: 'die', id: myId, killerId: data.shooterId });
+                    }
+                } else if (remotePlayers[data.targetId]) {
+                    remotePlayers[data.targetId].hp -= data.damage;
+                    updateHealthBar(remotePlayers[data.targetId].hpData, remotePlayers[data.targetId].hp);
+                }
+            } 
+            else if (data.type === 'die') {
+                showKillfeed(data.killerId, data.id);
+                
+                // برطرف شدن باگ: آپدیت امن امتیاز قاتل
+                if (data.killerId === myId) {
+                    playerScore++;
+                    document.getElementById('score-val').innerText = playerScore;
+                    document.getElementById('shop-score-val').innerText = playerScore;
+                    checkShopUnlocks();
+                }
+                
+                // برطرف شدن باگ: حذف ایمن مشِ مقتول از صفحه (فقط کسی که مرده پاک میشود)
+                if (data.id !== myId && remotePlayers[data.id]) {
+                    scene.remove(remotePlayers[data.id].mesh);
+                    delete remotePlayers[data.id];
+                }
+            }
+        } catch (err) {
+            console.error("Network sync error bypassed: ", err);
+        }
+    });
+}
+
+function broadcast(data) {
+    if (isHost) {
+        for (let id in connections) {
+            if (connections[id].open) connections[id].send(data);
+        }
+    } else {
+        let hostCode = document.getElementById('join-code-input').value.trim();
+        if (connections[hostCode] && connections[hostCode].open) {
+            connections[hostCode].send(data);
+        }
     }
 }
 
 function shoot() {
-    if (isDead || isReloading) return;
-    const now = Date.now();
-    const config = WEAPONS_CONFIG[currentWeapon];
-    if (now - lastFireTime < config.fireRate) return;
-    if (currentAmmo <= 0) {
-        document.getElementById('reload-prompt').style.display = 'block';
-        return;
-    }
-
-    lastFireTime = now;
+    if (isDead || isReloading || currentAmmo <= 0 || Date.now() - lastFireTime < WEAPONS_CONFIG[currentWeapon].fireRate) return;
+    lastFireTime = Date.now();
     currentAmmo--;
-    updateAmmoDisplay();
-    playSound('shoot');
+    updateAmmoUI();
+    playSound('shoot', false);
+    
+    pitchObject.rotation.x += 0.05;
+    setTimeout(() => pitchObject.rotation.x -= 0.05, 50);
 
-    muzzleLight.intensity = 5;
+    muzzleLight.intensity = userGraphicsQuality === 'high' ? 2 : 1;
     setTimeout(() => muzzleLight.intensity = 0, 50);
 
-    // Raycasting برای شلیک
+    broadcast({ type: 'shoot', id: myId });
+
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    
+    let closestIntersect = null;
+    let closestDist = Infinity;
+    let hitId = null;
+    let isHeadshot = false;
 
-    const targets = [];
-    Object.keys(remotePlayers).forEach(id => {
-        const p = remotePlayers[id];
-        if (p) {
-            p.traverse(child => {
-                if (child.isMesh) {
-                    child.userData.ownerId = id;
-                    targets.push(child);
-                }
-            });
+    for (let id in remotePlayers) {
+        let intersects = raycaster.intersectObject(remotePlayers[id].mesh, true);
+        if (intersects.length > 0 && intersects[0].distance < closestDist) {
+            closestDist = intersects[0].distance;
+            closestIntersect = intersects[0];
+            hitId = id;
+            isHeadshot = intersects[0].object.userData.isHead;
         }
-    });
+    }
 
-    const intersects = raycaster.intersectObjects(targets);
-    if (intersects.length > 0) {
-        const hit = intersects[0];
-        const targetId = hit.object.userData.ownerId;
-        const isHead = hit.object.userData.isHead;
-        const damage = isHead ? config.dmgHead : config.dmgBody;
+    for (let mesh of wallMeshes) {
+        let intersects = raycaster.intersectObject(mesh);
+        if (intersects.length > 0 && intersects[0].distance < closestDist) {
+            hitId = null; 
+            closestDist = intersects[0].distance;
+        }
+    }
 
-        playSound('hit', isHead);
-        const crosshair = document.getElementById('crosshair');
-        crosshair.classList.add('hit');
-        setTimeout(() => crosshair.classList.remove('hit'), 150);
-
-        broadcastAll({ type: 'hit', target: targetId, dmg: damage, attacker: myId });
+    if (hitId) {
+        document.getElementById('crosshair').classList.add('hit');
+        setTimeout(() => document.getElementById('crosshair').classList.remove('hit'), 150);
+        
+        let weaponStats = WEAPONS_CONFIG[currentWeapon];
+        let damage = isHeadshot ? weaponStats.dmgHead : weaponStats.dmgBody;
+        
+        broadcast({ type: 'hit', targetId: hitId, shooterId: myId, damage: damage, isHeadshot: isHeadshot });
+    }
+    
+    if (currentAmmo <= 0) {
+        document.getElementById('reload-prompt').style.display = 'block';
     }
 }
 
-function updateAmmoDisplay() {
-    document.getElementById('ammo-val').innerText = `${currentAmmo}/${WEAPONS_CONFIG[currentWeapon].clipSize}`;
-}
+// Controls
+let keys = { w: false, a: false, s: false, d: false, space: false };
+document.addEventListener('keydown', e => {
+    let k = e.key.toLowerCase();
+    if (keys.hasOwnProperty(k)) keys[k] = true;
+    if (k === ' ') keys.space = true;
+    if (k === 'r') reloadWeapon();
+    if (k === 'c') toggleCrouch();
+});
+document.addEventListener('keyup', e => {
+    let k = e.key.toLowerCase();
+    if (keys.hasOwnProperty(k)) keys[k] = false;
+    if (k === ' ') keys.space = false;
+});
 
-function reloadWeapon() {
-    if (isReloading) return;
-    isReloading = true;
-    playSound('reload');
-    document.getElementById('reload-prompt').style.display = 'none';
-    setTimeout(() => {
-        currentAmmo = WEAPONS_CONFIG[currentWeapon].clipSize;
-        updateAmmoDisplay();
-        isReloading = false;
-    }, WEAPONS_CONFIG[currentWeapon].reloadTime);
-}
+document.addEventListener('mousedown', e => {
+    if (!isRunning || isTouch || document.pointerLockElement !== document.body) return;
+    if (e.button === 0) {
+        if (WEAPONS_CONFIG[currentWeapon].auto) {
+            autoFireInterval = setInterval(shoot, WEAPONS_CONFIG[currentWeapon].fireRate);
+            shoot();
+        } else shoot();
+    } else if (e.button === 2) {
+        toggleZoom();
+    }
+});
+document.addEventListener('mouseup', e => {
+    if (e.button === 0 && autoFireInterval) {
+        clearInterval(autoFireInterval);
+        autoFireInterval = null;
+    }
+});
 
-function setupControls() {
-    document.addEventListener('keydown', e => {
-        if (e.code === 'KeyW') moveForward = true;
-        if (e.code === 'KeyS') moveBackward = true;
-        if (e.code === 'KeyA') moveLeft = true;
-        if (e.code === 'KeyD') moveRight = true;
-        if (e.code === 'KeyR') reloadWeapon();
-        if (e.code === 'Space') triggerJump();
-    });
-    document.addEventListener('keyup', e => {
-        if (e.code === 'KeyW') moveForward = false;
-        if (e.code === 'KeyS') moveBackward = false;
-        if (e.code === 'KeyA') moveLeft = false;
-        if (e.code === 'KeyD') moveRight = false;
-    });
+document.addEventListener('mousemove', e => {
+    if (document.pointerLockElement === document.body) {
+        let sens = isZoomed ? 0.001 : 0.002;
+        yawObject.rotation.y -= e.movementX * sens;
+        pitchObject.rotation.x -= e.movementY * sens;
+        pitchObject.rotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, pitchObject.rotation.x));
+    }
+});
 
-    window.addEventListener('mousedown', (e) => {
-        if (isRunning && e.button === 0) shoot();
-    });
-
-    // Touch Controls
-    const fireBtn = document.getElementById('fire-btn');
-    fireBtn.addEventListener('touchstart', (e) => { e.preventDefault(); shoot(); });
-
-    setupJoystick();
-}
-
-function setupJoystick() {
+let joystickData = { dx: 0, dy: 0 };
+function initJoystick() {
     const zone = document.getElementById('joystick-zone');
     const knob = document.getElementById('joystick-knob');
-    let touchId = null;
-
+    let center = { x: 0, y: 0 };
+    let maxDist = 40;
+    
     zone.addEventListener('touchstart', e => {
-        const touch = e.changedTouches[0];
-        touchId = touch.identifier;
+        let rect = zone.getBoundingClientRect();
+        center.x = rect.left + rect.width / 2;
+        center.y = rect.top + rect.height / 2;
+        updateJoy(e.touches[0]);
     });
-
-    zone.addEventListener('touchmove', e => {
-        for(let touch of e.changedTouches) {
-            if(touch.identifier === touchId) {
-                const rect = zone.getBoundingClientRect();
-                const x = touch.clientX - (rect.left + rect.width/2);
-                const y = touch.clientY - (rect.top + rect.height/2);
-                const dist = Math.min(Math.hypot(x, y), 40);
-                const angle = Math.atan2(y, x);
-                
-                knob.style.transform = `translate(${Math.cos(angle)*dist}px, ${Math.sin(angle)*dist}px)`;
-                joystickVector.x = Math.cos(angle) * (dist / 40);
-                joystickVector.y = Math.sin(angle) * (dist / 40);
+    zone.addEventListener('touchmove', e => { e.preventDefault(); updateJoy(e.touches[0]); });
+    zone.addEventListener('touchend', e => {
+        knob.style.transform = `translate(0px, 0px)`;
+        joystickData.dx = 0; joystickData.dy = 0;
+    });
+    
+    function updateJoy(touch) {
+        let dx = touch.clientX - center.x;
+        let dy = touch.clientY - center.y;
+        let dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist > maxDist) { dx = (dx/dist) * maxDist; dy = (dy/dist) * maxDist; }
+        knob.style.transform = `translate(${dx}px, ${dy}px)`;
+        joystickData.dx = dx / maxDist; joystickData.dy = dy / maxDist;
+    }
+    
+    let lastTouch = null;
+    document.addEventListener('touchstart', e => {
+        for (let t of e.touches) {
+            if (t.clientX > window.innerWidth / 2 && !t.target.closest('.touch-zone') && !t.target.closest('.top-action-btn')) {
+                lastTouch = { x: t.clientX, y: t.clientY, id: t.identifier };
             }
         }
     });
+    document.addEventListener('touchmove', e => {
+        if (!lastTouch) return;
+        for (let t of e.touches) {
+            if (t.identifier === lastTouch.id) {
+                let sens = isZoomed ? 0.002 : 0.004;
+                yawObject.rotation.y -= (t.clientX - lastTouch.x) * sens;
+                pitchObject.rotation.x -= (t.clientY - lastTouch.y) * sens;
+                pitchObject.rotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, pitchObject.rotation.x));
+                lastTouch.x = t.clientX; lastTouch.y = t.clientY;
+            }
+        }
+    }, { passive: false });
+    document.addEventListener('touchend', e => {
+        if (!lastTouch) return;
+        let found = false;
+        for (let t of e.touches) { if (t.identifier === lastTouch.id) found = true; }
+        if (!found) lastTouch = null;
+    });
 
-    const reset = () => {
-        knob.style.transform = `translate(0px, 0px)`;
-        joystickVector = { x: 0, y: 0 };
-    };
-    zone.addEventListener('touchend', reset);
-    zone.addEventListener('touchcancel', reset);
+    const fireBtn = document.getElementById('fire-btn');
+    fireBtn.addEventListener('touchstart', e => {
+        e.preventDefault();
+        if (WEAPONS_CONFIG[currentWeapon].auto) {
+            autoFireInterval = setInterval(shoot, WEAPONS_CONFIG[currentWeapon].fireRate);
+            shoot();
+        } else shoot();
+    });
+    fireBtn.addEventListener('touchend', e => {
+        e.preventDefault();
+        if (autoFireInterval) { clearInterval(autoFireInterval); autoFireInterval = null; }
+    });
 }
 
 function triggerJump() {
-    if (isGrounded && !isDead) {
-        playerVelocityY = 12;
-        isGrounded = false;
-    }
+    if (isGrounded && !isDead) { playerVelocityY = 15; isGrounded = false; }
 }
 
 function toggleCrouch() {
     isCrouched = !isCrouched;
-    yawObject.position.y = isCrouched ? PLAYER_HEIGHT_CROUCH : PLAYER_HEIGHT_STAND;
+    document.getElementById('crouch-btn').classList.toggle('active', isCrouched);
+}
+
+function reloadWeapon() {
+    if (isReloading || currentAmmo === WEAPONS_CONFIG[currentWeapon].clipSize) return;
+    isReloading = true;
+    playSound('reload', false);
+    document.getElementById('ammo-val').innerText = `.../${WEAPONS_CONFIG[currentWeapon].clipSize}`;
+    document.getElementById('reload-prompt').style.display = 'none';
+    
+    localWeaponMesh.rotation.x = -Math.PI / 4;
+    
+    setTimeout(() => {
+        currentAmmo = WEAPONS_CONFIG[currentWeapon].clipSize;
+        isReloading = false;
+        updateAmmoUI();
+        localWeaponMesh.rotation.x = 0;
+    }, WEAPONS_CONFIG[currentWeapon].reloadTime);
+}
+
+function updateAmmoUI() {
+    document.getElementById('ammo-val').innerText = `${currentAmmo}/${WEAPONS_CONFIG[currentWeapon].clipSize}`;
+}
+
+function toggleZoom() {
+    if (currentWeapon !== 'sniper') return;
+    isZoomed = !isZoomed;
+    document.getElementById('zoom-btn').classList.toggle('active', isZoomed);
+    document.getElementById('sniper-scope').style.display = isZoomed ? 'block' : 'none';
+    camera.fov = isZoomed ? 20 : 75;
+    camera.updateProjectionMatrix();
+    localWeaponMesh.visible = !isZoomed;
+    document.getElementById('crosshair').style.display = isZoomed ? 'none' : 'block';
 }
 
 function cycleCrosshairStyle() {
-    crosshairStyleIndex = (crosshairStyleIndex + 1) % 3;
-    const c = document.getElementById('crosshair');
-    if(crosshairStyleIndex === 0) c.style.borderRadius = '50%';
-    else if(crosshairStyleIndex === 1) c.style.borderRadius = '0px';
-    else c.style.borderRadius = '2px';
+    const styles = ['crosshair', 'crosshair circle', 'crosshair dot'];
+    crosshairStyleIndex = (crosshairStyleIndex + 1) % styles.length;
 }
 
 function toggleShopModal() {
-    const s = document.getElementById('shop-modal');
-    s.style.display = s.style.display === 'none' ? 'flex' : 'none';
+    let m = document.getElementById('shop-modal');
+    m.style.display = m.style.display === 'none' ? 'flex' : 'none';
+    if (document.pointerLockElement) document.exitPointerLock();
+}
+
+function checkShopUnlocks() {
+    if (playerScore >= 1 && !akUnlocked) {
+        akUnlocked = true;
+        let btn = document.getElementById('shop-btn-ak');
+        btn.style.opacity = '1'; btn.disabled = false; btn.innerText = 'AK رگباری';
+    }
+    if (playerScore >= 1 && !sniperUnlocked) {
+        sniperUnlocked = true;
+        let btn = document.getElementById('shop-btn-sniper');
+        btn.style.opacity = '1'; btn.disabled = false; btn.innerText = 'اسنایپر';
+        document.getElementById('zoom-btn').style.display = 'flex';
+    }
 }
 
 function selectWeapon(w) {
     currentWeapon = w;
-    document.getElementById('weapon-display').innerText = WEAPONS_CONFIG[w].name;
     currentAmmo = WEAPONS_CONFIG[w].clipSize;
-    updateAmmoDisplay();
-    toggleShopModal();
+    updateAmmoUI();
+    document.getElementById('weapon-display').innerText = WEAPONS_CONFIG[w].name;
+    document.getElementById('shop-modal').style.display = 'none';
+    document.getElementById('zoom-btn').style.display = (w === 'sniper' && isTouch) ? 'flex' : 'none';
+    if (!isTouch && !isDead) document.body.requestPointerLock();
 }
 
-function gameLoop() {
+function showDamageEffect() {
+    let el = document.getElementById('damage-overlay');
+    el.style.boxShadow = 'inset 0 0 120px rgba(239, 68, 68, 0.8)';
+    setTimeout(() => el.style.boxShadow = 'inset 0 0 80px rgba(239, 68, 68, 0)', 300);
+}
+
+function showKillfeed(killerId, victimId) {
+    let kName = killerId === myId ? 'شما' : `پلیر ${killerId.substring(0,4)}`;
+    let vName = victimId === myId ? 'شما' : `پلیر ${victimId.substring(0,4)}`;
+    let div = document.createElement('div');
+    div.className = 'killfeed-item';
+    div.innerHTML = `<span style="color:#38bdf8">${kName}</span> ⚔️ <span style="color:#ef4444">${vName}</span>`;
+    document.getElementById('killfeed').appendChild(div);
+    setTimeout(() => div.remove(), 4000);
+}
+
+async function toggleVoiceChat() {
+    const btn = document.getElementById('voice-toggle-btn');
+    if (!isVoiceEnabled) {
+        try {
+            localAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            isVoiceEnabled = true;
+            btn.innerText = '🎙️ ویس (روشن)';
+            btn.style.color = '#22c55e';
+            btn.style.borderColor = '#22c55e';
+            for (let p of allRoomPeers) { if (p !== myId) peer.call(p, localAudioStream); }
+        } catch (err) { alert('دسترسی به میکروفون داده نشد!'); }
+    } else {
+        isVoiceEnabled = false;
+        if (localAudioStream) localAudioStream.getTracks().forEach(t => t.stop());
+        btn.innerText = '🎙️ ویس (خاموش)';
+        btn.style.color = '#cbd5e1';
+        btn.style.borderColor = '#64748b';
+        for (let id in activeVoiceCalls) { activeVoiceCalls[id].close(); }
+        activeVoiceCalls = {};
+    }
+}
+
+function handleVoiceCall(call) {
+    if (isVoiceEnabled && localAudioStream) call.answer(localAudioStream);
+    else call.answer();
+    call.on('stream', remoteStream => {
+        if (!remoteAudioElements[call.peer]) {
+            let audio = document.createElement('audio');
+            audio.autoplay = true; audio.srcObject = remoteStream;
+            document.body.appendChild(audio);
+            remoteAudioElements[call.peer] = audio;
+        }
+    });
+    activeVoiceCalls[call.peer] = call;
+}
+
+let prevTime = performance.now();
+function animate() {
     if (!isRunning) return;
-    requestAnimationFrame(gameLoop);
-
-    const delta = 0.016;
-
+    requestAnimationFrame(animate);
+    
+    let time = performance.now();
+    let delta = (time - prevTime) / 1000;
+    prevTime = time;
+    
     if (!isDead) {
-        // Gravity & Movement
         playerVelocityY += gravity * delta;
-        yawObject.position.y += playerVelocityY * delta;
-
-        if (yawObject.position.y <= (isCrouched ? PLAYER_HEIGHT_CROUCH : PLAYER_HEIGHT_STAND)) {
-            yawObject.position.y = isCrouched ? PLAYER_HEIGHT_CROUCH : PLAYER_HEIGHT_STAND;
+        let moveY = playerVelocityY * delta;
+        yawObject.position.y += moveY;
+        
+        let targetHeight = isCrouched ? PLAYER_HEIGHT_CROUCH : PLAYER_HEIGHT_STAND;
+        if (yawObject.position.y <= targetHeight) {
+            yawObject.position.y = targetHeight;
             playerVelocityY = 0;
             isGrounded = true;
+        } else isGrounded = false;
+
+        let dir = new THREE.Vector3();
+        if (!isTouch) {
+            if (keys.w) dir.z -= 1;
+            if (keys.s) dir.z += 1;
+            if (keys.a) dir.x -= 1;
+            if (keys.d) dir.x += 1;
+        } else {
+            dir.x = joystickData.dx;
+            dir.z = joystickData.dy;
+        }
+        dir.normalize();
+        dir.applyQuaternion(yawObject.quaternion);
+        
+        let speed = (isCrouched || isZoomed) ? PLAYER_SPEED_WALK * 0.5 : PLAYER_SPEED_WALK;
+        let moveX = dir.x * speed * delta;
+        let moveZ = dir.z * speed * delta;
+        
+        let playerBox = new THREE.Box3();
+        playerBox.setFromCenterAndSize(
+            new THREE.Vector3(yawObject.position.x + moveX, yawObject.position.y, yawObject.position.z + moveZ),
+            new THREE.Vector3(2.5, targetHeight, 2.5)
+        );
+        
+        let collides = false;
+        for (let w of walls) { if (playerBox.intersectsBox(w)) { collides = true; break; } }
+        
+        if (!collides) {
+            yawObject.position.x += moveX;
+            yawObject.position.z += moveZ;
         }
 
-        let moveX = joystickVector.x, moveZ = joystickVector.y;
-        if (moveForward) moveZ = -1;
-        if (moveBackward) moveZ = 1;
-        if (moveLeft) moveX = -1;
-        if (moveRight) moveX = 1;
-
-        if (moveX !== 0 || moveZ !== 0) {
-            const speed = PLAYER_SPEED_WALK * delta;
-            yawObject.translateX(moveX * speed);
-            yawObject.translateZ(moveZ * speed);
-        }
-
-        // ارسال Position حتی پس از کشتن بقیه بدون وقفه
-        const now = Date.now();
-        if (now - lastPosSendTime > 40) { // 25 FPS Network Loop
-            broadcastAll({
-                type: 'pos',
-                id: myId,
-                x: yawObject.position.x,
-                y: yawObject.position.y,
-                z: yawObject.position.z,
-                ry: yawObject.rotation.y,
-                hp: playerHealth
+        if (time - lastPosSendTime > 40) {
+            broadcast({
+                type: 'pos', id: myId,
+                x: yawObject.position.x, y: yawObject.position.y, z: yawObject.position.z,
+                ry: yawObject.rotation.y, rx: pitchObject.rotation.x,
+                vx: moveX, vz: moveZ
             });
-            lastPosSendTime = now;
+            lastPosSendTime = time;
         }
     }
-
+    
     renderer.render(scene, camera);
 }
 </script>
