@@ -285,21 +285,20 @@
 </div>
 
 <script>
-// بررسی سیستم‌عامل: فقط اندروید و آی‌او‌اس مجاز هستند
+// بررسی سیستم‌عامل: فقط اندروید مجاز است و سایر پلتفرم‌ها (از جمله iOS) مسدود می‌شوند
 const ua = navigator.userAgent || navigator.vendor || window.opera;
 const isAndroid = /android/i.test(ua);
-const isIOS = /iPad|iPhone|iPod/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
-if (!isAndroid && !isIOS) {
+if (!isAndroid) {
     document.body.innerHTML = `
         <div style="position:fixed;top:0;left:0;width:100%;height:100%;background:#090d16;z-index:99999;display:flex;justify-content:center;align-items:center;font-family:Tahoma;color:#fff;direction:rtl;">
             <div style="background:rgba(15, 23, 42, 0.95);border:1px solid rgba(239,68,68,0.4);padding:25px;border-radius:18px;text-align:center;max-width:360px;width:90%;box-shadow:0 20px 40px rgba(0,0,0,0.8);">
                 <h1 style="color:#ef4444;font-size:18px;margin-top:0;">خطای دسترسی</h1>
-                <p style="color:#94a3b8;font-size:12px;margin:15px 0;line-height:1.6;">این بازی فقط روی سیستم‌عامل‌های <strong>اندروید</strong> و <strong>آی‌او‌اس</strong> قابل اجرا است. ورود با ویندوز یا سایر پلتفرم‌ها مجاز نیست.</p>
+                <p style="color:#94a3b8;font-size:12px;margin:15px 0;line-height:1.6;">این بازی فقط روی سیستم‌عامل <strong>اندروید</strong> قابل اجرا است. ورود با سایر پلتفرم‌ها (مانند iOS و ویندوز) مجاز نیست.</p>
             </div>
         </div>
     `;
-    throw new Error("Access restricted: Only Android and iOS are allowed.");
+    throw new Error("Access restricted: Only Android is allowed.");
 }
 
 let peer = null, isHost = false, myId = '';
