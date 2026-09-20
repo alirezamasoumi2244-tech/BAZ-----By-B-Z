@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>شوتر آنلاین موبایل -baz by B-Z GAMING</title>
+    <title>شوتر آنلاین موبایل - B-Z GAMING (SECURE EDITION)</title>
     <style>
         * { box-sizing: border-box; user-select: none; -webkit-user-select: none; touch-action: none; }
         body, html {
@@ -869,7 +869,6 @@ function setupConnEvents(conn) {
             let targetId = data.id || conn.peer;
             
             if (isHost) {
-                // محاسبه ضد چیت سرعت با حساسیت کمتر (آستانه مجاز بیشتر شده تا بازیکنان عادی بن نشوند)
                 if (!hostPlayerStates[targetId]) {
                     hostPlayerStates[targetId] = { x: data.x, z: data.z, time: performance.now() };
                 } else {
@@ -878,7 +877,7 @@ function setupConnEvents(conn) {
                     let dt = (now - st.time) / 1000;
                     if (dt > 0.05) {
                         let dist = Math.hypot(data.x - st.x, data.z - st.z);
-                        let maxAllowedDist = 130 * dt; // آستانه مجاز تنظیم‌شده برای جلوگیری از خطای مثبت روی سرعت عادی
+                        let maxAllowedDist = 65 * dt;
                         if (dist > maxAllowedDist && dt < 3.0) {
                             disconnectCheater(conn.peer, "تشخیص تقلب توسط هاست: حرکت غیرمجاز / Speed Hack");
                             return;
@@ -1199,11 +1198,8 @@ function fireWeapon() {
     if (isReloading || isDead || isBanned) return;
     const now = performance.now(), cfg = WEAPONS_CONFIG[currentWeapon];
 
-    // آنتی‌چیت سرعت شلیک: برای کلت و اسنایپ حداکثر ۷ تیر در ثانیه (فاصله ۱۴۰ میلی‌ثانیه بین هر تیر) مجاز است
-    let minAllowedInterval = (currentWeapon === 'pistol' || currentWeapon === 'sniper') ? 140 : (cfg.fireRate - 50);
-
-    if (now - lastFireTime < minAllowedInterval) {
-        triggerAntiCheatBan(`استفاده از چیت سرعت آتش غیرمجاز (Rapid Fire / Macro روی ${cfg.name})`);
+    // محدودیت شلیک عادی: رعایت فاصله حداقل ۳۵۰ میلی‌ثانیه بدون بن شدن
+    if (now - lastFireTime < 350) {
         return;
     }
 
