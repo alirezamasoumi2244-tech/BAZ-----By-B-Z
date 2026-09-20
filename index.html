@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>شوتر آنلاین موبایل - B-Z GAMING</title>
+    <title>شوتر آنلاین موبایل - B-Z GAMING </title>
     <style>
         * { box-sizing: border-box; user-select: none; -webkit-user-select: none; touch-action: none; }
         body, html {
@@ -160,11 +160,26 @@
         #ammo-display { position: absolute; bottom: 15px; right: 190px; background: rgba(15, 23, 42, 0.85); padding: 6px 12px; border-radius: 10px; text-align: center; z-index: 15; border: 1px solid rgba(56,189,248,0.3); }
         #damage-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; box-shadow: inset 0 0 80px rgba(239, 68, 68, 0); pointer-events: none; z-index: 9; transition: box-shadow 0.2s; }
         #reload-prompt { position: absolute; top: 52%; left: 50%; transform: translate(-50%, -50%); background: rgba(239,68,68,0.85); padding: 4px 12px; border-radius: 6px; font-size: 11px; display: none; z-index: 15; }
+        
+        #anticheat-ban-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(15, 5, 5, 0.98); z-index: 999999;
+            display: none; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 20px;
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.2/peerjs.min.js"></script>
 </head>
 <body>
+
+<div id="anticheat-ban-screen">
+    <div style="background: rgba(239, 68, 68, 0.15); border: 2px solid #ef4444; padding: 30px; border-radius: 20px; max-width: 400px; width: 100%; box-shadow: 0 0 50px rgba(239,68,68,0.5);">
+        <h1 style="color: #ef4444; font-size: 24px; margin-bottom: 10px;">🛡️ سیستم ضد چیت B-Z</h1>
+        <p style="color: #fca5a5; font-size: 14px; font-weight: bold; margin-bottom: 15px;">حساب کاربری و دستگاه شما به دلیل تقلب مسدود شد!</p>
+        <p id="ban-reason-text" style="color: #cbd5e1; font-size: 12px; line-height: 1.6; margin-bottom: 20px; background: rgba(0,0,0,0.5); padding: 10px; border-radius: 8px;"></p>
+        <p style="color: #94a3b8; font-size: 11px;">شما دیگر اجازه ورود به هیچ رومی را ندارید.</p>
+    </div>
+</div>
 
 <div id="intro-screen">
     <div class="gaming-logo">B-Z<br>GAMING</div>
@@ -233,7 +248,7 @@
 <div id="main-menu" class="menu-overlay">
     <div class="menu-box">
         <h1>شوتر آنلاین موبایل</h1>
-        <p style="color: #94a3b8; font-size: 11px; margin-bottom: 8px;">ظرفیت اتاق: تا ۵۰ بازیکن</p>
+        <p style="color: #94a3b8; font-size: 11px; margin-bottom: 8px;">ظرفیت اتاق: تا ۵۰ بازیکن | مجهز به سیستم ضدچیت قدرتمند</p>
         
         <div style="margin-bottom: 14px; text-align: right;">
             <span style="font-size: 11px; color: #38bdf8; display: block; margin-bottom: 6px; font-weight: bold;">کیفیت گرافیک و نورپردازی:</span>
@@ -277,15 +292,15 @@
 
 <div id="game-over" class="menu-overlay" style="display: none;">
     <div class="menu-box">
-        <h1 style="color: #ef4444;">شما کشته شدید!</h1>
-        <p style="color: #94a3b8; font-size: 13px; margin: 15px 0;">در حال تماشای بازی...</p>
+        <h1 id="game-over-title" style="color: #ef4444;">شما کشته شدید!</h1>
+        <p id="game-over-desc" style="color: #94a3b8; font-size: 13px; margin: 15px 0;">در حال تماشای بازی...</p>
         <div class="status-text" style="color: #f59e0b; font-size: 11px; margin-bottom: 12px;">منتظر بمانید تا راند به پایان برسد و مجدداً زنده شوید.</div>
         <button class="btn" onclick="leaveRoom()" style="background: #334155;">خروج از روم (لفت)</button>
     </div>
 </div>
 
 <script>
-// بررسی سیستم‌عامل: فقط اندروید مجاز است و سایر پلتفرم‌ها (از جمله iOS) مسدود می‌شوند
+// بررسی سیستم‌عامل: فقط اندروید مجاز است
 const ua = navigator.userAgent || navigator.vendor || window.opera;
 const isAndroid = /android/i.test(ua);
 
@@ -294,11 +309,29 @@ if (!isAndroid) {
         <div style="position:fixed;top:0;left:0;width:100%;height:100%;background:#090d16;z-index:99999;display:flex;justify-content:center;align-items:center;font-family:Tahoma;color:#fff;direction:rtl;">
             <div style="background:rgba(15, 23, 42, 0.95);border:1px solid rgba(239,68,68,0.4);padding:25px;border-radius:18px;text-align:center;max-width:360px;width:90%;box-shadow:0 20px 40px rgba(0,0,0,0.8);">
                 <h1 style="color:#ef4444;font-size:18px;margin-top:0;">خطای دسترسی</h1>
-                <p style="color:#94a3b8;font-size:12px;margin:15px 0;line-height:1.6;">این بازی فقط روی سیستم‌عامل <strong>اندروید</strong> قابل اجرا است. ورود با سایر پلتفرم‌ها (مانند iOS و ویندوز) مجاز نیست.</p>
+                <p style="color:#94a3b8;font-size:12px;margin:15px 0;line-height:1.6;">این بازی فقط روی سیستم‌عامل <strong>اندروید</strong> قابل اجرا است. ورود با سایر پلتفرم‌ها مجاز نیست.</p>
             </div>
         </div>
     `;
     throw new Error("Access restricted: Only Android is allowed.");
+}
+
+// سیستم ضد چیت قدرتمند (Anti-Cheat Core)
+let isBanned = false;
+function triggerAntiCheatBan(reason) {
+    if (isBanned) return;
+    isBanned = true;
+    isRunning = false;
+    
+    // پاکسازی اتصالات و صداها
+    if (peer) { try { peer.destroy(); } catch(e){} }
+    connections = {};
+    
+    document.getElementById('ban-reason-text').innerText = `دلیل مسدودسازی: ${reason}`;
+    document.getElementById('anticheat-ban-screen').style.display = 'flex';
+    document.querySelectorAll('.menu-overlay').forEach(el => el.style.display = 'none');
+    document.getElementById('ui-layer').style.display = 'none';
+    document.getElementById('mobile-controls').style.display = 'none';
 }
 
 let peer = null, isHost = false, myId = '';
@@ -371,7 +404,7 @@ function playSound(type, isHeadshot = false) {
             gain.gain.setValueAtTime(0.15, now);
             gain.gain.linearRampToValueAtTime(0.01, now + 0.06);
         } else if (type === 'reload') {
-            osc.type = 'sine';
+            osc.type  = 'sine';
             osc.frequency.setValueAtTime(200, now);
             osc.frequency.linearRampToValueAtTime(400, now + 0.15);
             gain.gain.setValueAtTime(0.08, now);
@@ -593,6 +626,7 @@ function setGraphicsQuality(q) {
 }
 
 function createRoom(isPublic) {
+    if (isBanned) return;
     isHost = true; 
     document.getElementById('menu-status').innerText = 'در حال ساخت روم...';
     
@@ -643,6 +677,7 @@ function initPeerHost(id, isPublic) {
 }
 
 function joinRoom() {
+    if (isBanned) return;
     let code = document.getElementById('join-code-input').value.trim();
     if (!code) return; 
     
@@ -762,6 +797,8 @@ function setupConnEvents(conn) {
     }
 
     conn.on('data', data => {
+        if (isBanned) return;
+
         if (data.type === 'start') startGame(data.mapSize);
         else if (data.type === 'room_peers') {
             data.peers.forEach(id => allRoomPeers.add(id));
@@ -811,6 +848,13 @@ function setupConnEvents(conn) {
             }
         }
         else if (data.type === 'hit') {
+            // [ANTI-CHEAT]: اعتبارسنجی سرور/هاست روی دمیج دریافتی از کلاینت‌ها
+            let expectedMaxDmg = 100; // بیشترین دمیج ممکن (اسنایپر هدشات)
+            if (data.dmg > expectedMaxDmg || data.dmg <= 0) {
+                triggerAntiCheatBan("تلاش برای تزریق پکت دمیج نامعتبر (Damage Hack)");
+                return;
+            }
+
             if (isHost && data.targetId !== myId) {
                 if (connections[data.targetId] && connections[data.targetId].open) {
                     connections[data.targetId].send(data);
@@ -838,7 +882,7 @@ function setupConnEvents(conn) {
                 alivePlayers.delete(data.victimId);
                 
                 if (alivePlayers.size <= 1 && isRunning) {
-                    setTimeout(() => { triggerRoundRestart(); }, 4000);
+                    setTimeout(() => { triggerRoundRestart(); }, 1500);
                 }
 
                 Object.values(connections).forEach(c => {
@@ -854,7 +898,7 @@ function setupConnEvents(conn) {
             }
         }
         else if (data.type === 'round_restart') {
-            applyRoundRestart();
+            applyRoundRestart(data.winnerId);
         }
         else if (data.type === 'player_leave') {
             allRoomPeers.delete(data.id);
@@ -890,34 +934,50 @@ function setupConnEvents(conn) {
 
 function triggerRoundRestart() {
     if (!isHost) return;
-    let restartMsg = { type: 'round_restart' };
+    let aliveArr = Array.from(alivePlayers);
+    let winnerId = aliveArr.length === 1 ? aliveArr[0] : '';
+    let restartMsg = { type: 'round_restart', winnerId: winnerId };
+    
     Object.values(connections).forEach(c => { if (c.open) c.send(restartMsg); });
-    applyRoundRestart();
+    applyRoundRestart(winnerId);
 }
 
-function applyRoundRestart() {
-    isDead = false;
-    playerHealth = 100;
-    currentAmmo = maxAmmo;
-    document.getElementById('ammo-val').innerText = `${currentAmmo}/${maxAmmo}`;
-    document.getElementById('hp-val').innerText = '۱۰۰';
-    document.getElementById('game-over').style.display = 'none';
+function applyRoundRestart(winnerId) {
+    let winnerText = (winnerId === myId) ? 'شما برنده این راند شدید! 🏆' : (winnerId ? 'راند تمام شد! برنده مشخص شد.' : 'راند مساوی شد!');
+    
+    let gameOverTitle = document.getElementById('game-over-title');
+    let gameOverDesc = document.getElementById('game-over-desc');
+    if (gameOverTitle) gameOverTitle.innerText = winnerText;
+    if (gameOverDesc) gameOverDesc.innerText = 'راند جدید تا لحظاتی دیگر شروع می‌شود...';
+    document.getElementById('game-over').style.display = 'flex';
 
-    let pos = getValidSpawnPosition();
-    yawObject.position.set(pos.x, PLAYER_HEIGHT_STAND, pos.z);
-    pitchObject.rotation.x = 0; 
+    setTimeout(() => {
+        isDead = false;
+        playerHealth = 100;
+        currentAmmo = maxAmmo;
+        document.getElementById('ammo-val').innerText = `${currentAmmo}/${maxAmmo}`;
+        document.getElementById('hp-val').innerText = '۱۰۰';
+        document.getElementById('game-over').style.display = 'none';
+        
+        if (gameOverTitle) gameOverTitle.innerText = 'شما کشته شدید!';
+        if (gameOverDesc) gameOverDesc.innerText = 'در حال تماشای بازی...';
 
-    Object.values(remotePlayers).forEach(rp => {
-        rp.health = 100;
-        updateHealthBar(rp.hpData, 100);
-        if (!scene.children.includes(rp.mesh)) {
-            scene.add(rp.mesh);
+        let pos = getValidSpawnPosition();
+        yawObject.position.set(pos.x, PLAYER_HEIGHT_STAND, pos.z);
+        pitchObject.rotation.x = 0; 
+
+        Object.values(remotePlayers).forEach(rp => {
+            rp.health = 100;
+            updateHealthBar(rp.hpData, 100);
+            if (!scene.children.includes(rp.mesh)) {
+                scene.add(rp.mesh);
+            }
+        });
+
+        if (isHost) {
+            alivePlayers = new Set(allRoomPeers);
         }
-    });
-
-    if (isHost) {
-        alivePlayers = new Set(allRoomPeers);
-    }
+    }, 3500);
 }
 
 function callPeerVoice(targetId) {
@@ -927,9 +987,7 @@ function callPeerVoice(targetId) {
         try {
             let call = peer.call(targetId, localAudioStream);
             setupVoiceCallEvents(call);
-        } catch (e) {
-            console.error('Voice call error:', e);
-        }
+        } catch (e) {}
     }
 }
 
@@ -1009,6 +1067,7 @@ async function toggleVoiceChat() {
 }
 
 function hostStartGame() { 
+    if (isBanned) return;
     if (isHost) {
         alivePlayers = new Set(allRoomPeers);
     }
@@ -1017,6 +1076,7 @@ function hostStartGame() {
 }
 
 function startGame(size) {
+    if (isBanned) return;
     MAP_SIZE = size || MAP_SIZE;
     document.querySelectorAll('.menu-overlay').forEach(el => el.style.display = 'none');
     document.getElementById('ui-layer').style.display = 'block';
@@ -1037,30 +1097,62 @@ function toggleZoom() { if (currentWeapon !== 'sniper') return; isZoomed = !isZo
 function cycleCrosshairStyle() { crosshairStyleIndex = (crosshairStyleIndex + 1) % 3; const ch = document.getElementById('crosshair'); ch.style.borderRadius = crosshairStyleIndex === 0 ? '50%' : (crosshairStyleIndex === 1 ? '0%' : '4px'); }
 
 function reloadWeapon() {
-    if (isReloading) return; isReloading = true; playSound('reload'); document.getElementById('reload-prompt').style.display = 'none';
-    setTimeout(() => { currentAmmo = maxAmmo; document.getElementById('ammo-val').innerText = `${currentAmmo}/${maxAmmo}`; isReloading = false; }, WEAPONS_CONFIG[currentWeapon].reloadTime);
+    if (isReloading || isBanned) return; 
+    isReloading = true; 
+    playSound('reload'); 
+    document.getElementById('reload-prompt').style.display = 'none';
+    setTimeout(() => { 
+        currentAmmo = maxAmmo; 
+        document.getElementById('ammo-val').innerText = `${currentAmmo}/${maxAmmo}`; 
+        isReloading = false; 
+    }, WEAPONS_CONFIG[currentWeapon].reloadTime);
 }
 
 function fireWeapon() {
-    if (isReloading || isDead) return;
+    if (isReloading || isDead || isBanned) return;
     const now = performance.now(), cfg = WEAPONS_CONFIG[currentWeapon];
-    if (now - lastFireTime < cfg.fireRate) return;
-    if (currentAmmo <= 0) { document.getElementById('reload-prompt').style.display = 'block'; return; }
+
+    // [ANTI-CHEAT 1]: بررسی نرخ شلیک (Rapid Fire & Macro Check)
+    // با در نظر گرفتن تلورانس بسیار کم ۵۰ میلی ثانیه برای پینگ شبکه
+    if (now - lastFireTime < (cfg.fireRate - 50)) {
+        triggerAntiCheatBan(`استفاده از چیت سرعت آتش غیرمجاز (Rapid Fire / Macro روی ${cfg.name})`);
+        return;
+    }
+
+    // [ANTI-CHEAT 2]: بررسی تعداد تیر خشاب (Infinite Ammo Check)
+    if (currentAmmo <= 0) { 
+        document.getElementById('reload-prompt').style.display = 'block'; 
+        return; 
+    }
     
-    lastFireTime = now; currentAmmo--; document.getElementById('ammo-val').innerText = `${currentAmmo}/${maxAmmo}`; playSound('shoot');
+    lastFireTime = now; 
+    currentAmmo--; 
+    document.getElementById('ammo-val').innerText = `${currentAmmo}/${maxAmmo}`; 
+    playSound('shoot');
     
     if (localWeaponMesh) { localWeaponMesh.position.z += 0.15; pitchObject.rotation.x += 0.02; }
     if (muzzleLight) { muzzleLight.intensity = 4.0; setTimeout(() => { if (muzzleLight) muzzleLight.intensity = 0; }, 60); }
 
-    const raycaster = new THREE.Raycaster(); raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    const raycaster = new THREE.Raycaster(); 
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    
     let wallIntersects = raycaster.intersectObjects(wallMeshes);
     let maxDist = wallIntersects.length > 0 ? wallIntersects[0].distance : 1000;
+    
     let targets = Object.keys(remotePlayers).map(id => ({ id: id, mesh: remotePlayers[id].mesh }));
     let intersects = raycaster.intersectObjects(targets.map(t => t.mesh), true);
     
     if (intersects.length > 0) {
         let hitDist = intersects[0].distance;
         let effectiveRange = MAP_SIZE * cfg.maxRange;
+
+        // [ANTI-CHEAT 3]: بررسی دقیق برخورد با دیوار و شلیک از پشت مانع (Wallhack / Silent Aim Detector)
+        // اگر دیوار بین بازیکن و هدف قرار داشته باشد یا فاصله بیشتر از حد مجاز باشد
+        if (wallIntersects.length > 0 && wallIntersects[0].distance < hitDist) {
+            triggerAntiCheatBan("تلاش برای شلیک از پشت دیوار یا استفاده از چیت Silent Aim / Wallhack");
+            return;
+        }
+
         if (hitDist <= effectiveRange && (wallIntersects.length === 0 || hitDist < maxDist)) {
             let hitObj = intersects[0].object;
             let targetId = null;
@@ -1151,7 +1243,7 @@ window.addEventListener('blur', () => {
 });
 
 function gameLoop() {
-    if (!isRunning) return;
+    if (!isRunning || isBanned) return;
     let currentHeight = isCrouched ? PLAYER_HEIGHT_CROUCH : PLAYER_HEIGHT_STAND;
     let speed = PLAYER_SPEED_WALK * 0.016;
 
