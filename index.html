@@ -244,10 +244,13 @@
             </div>
         </div>
 
-        <button class="btn btn-blue" onclick="createRoom()">ساخت روم (میزبان)</button>
-        <div style="margin: 12px 0; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px;">
-            <input type="text" id="join-code-input" placeholder="کد ۴ رقمی روم...">
-            <button class="btn" onclick="joinRoom()">پیوستن به روم</button>
+        <button class="btn btn-blue" onclick="createRoom(true)" style="margin-bottom: 6px;">ساخت روم عمومی (پابلیک)</button>
+        <button class="btn" onclick="createRoom(false)" style="background: #334155; margin-bottom: 10px;">ساخت روم خصوصی (پرایوت)</button>
+        
+        <div style="margin: 8px 0; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px;">
+            <p style="font-size: 10px; color: #94a3b8; margin-bottom: 6px;">برای ورود خودکار به روم پابلیک عدد <strong>۱</strong> را وارد کنید:</p>
+            <input type="text" id="join-code-input" placeholder="کد روم (مثلاً 1 برای پابلیک)...">
+            <button class="btn btn-blue" onclick="joinRoom()">پیوستن به روم</button>
         </div>
         <div id="menu-status" class="status-text"></div>
     </div>
@@ -259,6 +262,7 @@
         <div class="room-code-display" id="my-room-code">---</div>
         <div id="host-status" class="status-text" style="color: #f59e0b;">بازیکنان متصل: ۱ / ۵۰</div>
         <button class="btn btn-blue" id="start-game-btn" onclick="hostStartGame()" style="margin-top: 12px; display:none;">شروع بازی</button>
+        <button class="btn" onclick="leaveRoom()" style="background: #334155; margin-top: 6px;">خروج از لابی</button>
     </div>
 </div>
 
@@ -267,13 +271,16 @@
         <h1>متصل شدید!</h1>
         <p style="color: #94a3b8; font-size: 12px;">کد روم: <span id="connected-room-code" style="color:#f59e0b">---</span></p>
         <div class="status-text" style="color: #f59e0b; margin-top: 15px;">منتظر شروع بازی توسط میزبان...</div>
+        <button class="btn" onclick="leaveRoom()" style="background: #334155; margin-top: 15px;">خروج از روم</button>
     </div>
 </div>
 
 <div id="game-over" class="menu-overlay" style="display: none;">
     <div class="menu-box">
-        <h1 style="color: #ef4444;">مردید!</h1>
-        <button class="btn" onclick="location.reload()">تلاش مجدد</button>
+        <h1 style="color: #ef4444;">شما کشته شدید!</h1>
+        <p style="color: #94a3b8; font-size: 13px; margin: 15px 0;">در حال تماشای بازی...</p>
+        <div class="status-text" style="color: #f59e0b; font-size: 11px; margin-bottom: 12px;">منتظر بمانید تا راند به پایان برسد و مجدداً زنده شوید.</div>
+        <button class="btn" onclick="leaveRoom()" style="background: #334155;">خروج از روم (لفت)</button>
     </div>
 </div>
 
@@ -295,6 +302,7 @@ let localWeaponMesh = null, muzzleLight = null;
 
 let localAudioStream = null, isVoiceEnabled = false, remoteAudioElements = {};
 let allRoomPeers = new Set();
+let alivePlayers = new Set();
 let activeVoiceCalls = {};
 
 let currentAmmo = 12, maxAmmo = 12, isReloading = false;
@@ -568,20 +576,50 @@ function setGraphicsQuality(q) {
     document.getElementById('gfx-' + q).classList.add('active'); 
 }
 
-function createRoom() {
-    isHost = true; document.getElementById('menu-status').innerText = 'در حال ساخت...';
-    peer = new Peer(Math.floor(1000 + Math.random() * 9000).toString(), peerConfig);
-    peer.on('open', id => {
-        myId = id; 
-        allRoomPeers.add(myId);
-        document.getElementById('main-menu').style.display = 'none';
-        document.getElementById('host-wait-menu').style.display = 'flex';
-        document.getElementById('my-room-code').innerText = id;
+function createRoom(isPublic) {
+    isHost = true; 
+    document.getElementById('menu-status').innerText = 'در حال ساخت روم...';
+    
+    if (isPublic) {
+        tryClaimPublicId(1);
+    } else {
+        let privateId = Math.floor(1000 + Math.random() * 9000).toString();
+        initPeerHost(privateId, false);
+    }
+}
+
+function tryClaimPublicId(index) {
+    if (index > 30) { 
+        alert('ظرفیت سرورهای عمومی در حال حاضر پر است!'); 
+        document.getElementById('menu-status').innerText = '';
+        return; 
+    }
+    let testId = 'bzg-public-' + index;
+    peer = new Peer(testId, peerConfig);
+    peer.on('open', id => { initPeerHost(id, true); });
+    peer.on('error', err => {
+        if (err.type === 'unavailable-id') { 
+            peer.destroy(); 
+            tryClaimPublicId(index + 1); 
+        } else {
+            document.getElementById('menu-status').innerText = 'خطا در ساخت روم عمومی';
+        }
     });
+}
+
+function initPeerHost(id, isPublic) {
+    myId = id; 
+    allRoomPeers.add(myId);
+    alivePlayers.add(myId);
+    document.getElementById('main-menu').style.display = 'none';
+    document.getElementById('host-wait-menu').style.display = 'flex';
+    document.getElementById('my-room-code').innerText = isPublic ? "روم عمومی (منتظر اتصال...)" : id;
+    
     peer.on('call', handleVoiceCall);
     peer.on('connection', conn => {
         connections[conn.peer] = conn; 
         allRoomPeers.add(conn.peer);
+        alivePlayers.add(conn.peer);
         setupConnEvents(conn);
         document.getElementById('host-status').innerText = `بازیکنان متصل: ${Object.keys(connections).length + 1} / ۵۰`;
         document.getElementById('start-game-btn').style.display = 'block';
@@ -589,32 +627,106 @@ function createRoom() {
 }
 
 function joinRoom() {
-    isHost = false; let code = document.getElementById('join-code-input').value.trim();
-    if (!code) return; document.getElementById('menu-status').innerText = 'درحال اتصال...';
+    let code = document.getElementById('join-code-input').value.trim();
+    if (!code) return; 
+    
+    if (code === '1') {
+        joinPublicRoom();
+    } else {
+        joinServer(code);
+    }
+}
+
+function joinPublicRoom() {
+    document.getElementById('menu-status').innerText = 'در حال یافتن روم عمومی مناسب...';
+    isHost = false;
+    peer = new Peer(undefined, peerConfig);
+    peer.on('open', id => {
+        myId = id;
+        allRoomPeers.add(myId);
+        tryConnectPublic(1);
+    });
+    peer.on('call', handleVoiceCall);
+}
+
+function tryConnectPublic(index) {
+    if (index > 30) { 
+        document.getElementById('menu-status').innerText = 'هیچ روم عمومی خالی یافت نشد!'; 
+        return; 
+    }
+    
+    let targetId = 'bzg-public-' + index;
+    let conn = peer.connect(targetId);
+    
+    let timeout = setTimeout(() => { 
+        try { conn.close(); } catch(e){} 
+        tryConnectPublic(index + 1); 
+    }, 1500);
+
+    conn.on('open', () => {
+        clearTimeout(timeout);
+        connections[targetId] = conn; 
+        setupConnEvents(conn);
+        document.getElementById('main-menu').style.display = 'none';
+        document.getElementById('client-wait-menu').style.display = 'flex';
+        document.getElementById('connected-room-code').innerText = 'روم عمومی (' + index + ')';
+    });
+    conn.on('error', () => { 
+        clearTimeout(timeout); 
+        tryConnectPublic(index + 1); 
+    });
+}
+
+function joinServer(targetId) {
+    isHost = false; 
+    document.getElementById('menu-status').innerText = 'درحال اتصال...';
     peer = new Peer(undefined, peerConfig);
     peer.on('open', id => {
         myId = id; 
         allRoomPeers.add(myId);
-        let conn = peer.connect(code); connections[code] = conn; setupConnEvents(conn);
+        let conn = peer.connect(targetId); 
+        connections[targetId] = conn; 
+        setupConnEvents(conn);
         conn.on('open', () => {
             document.getElementById('main-menu').style.display = 'none';
             document.getElementById('client-wait-menu').style.display = 'flex';
-            document.getElementById('connected-room-code').innerText = code;
+            document.getElementById('connected-room-code').innerText = targetId;
         });
     });
     peer.on('call', handleVoiceCall);
+}
+
+function leaveRoom() {
+    isRunning = false;
+    if (peer) {
+        try { peer.destroy(); } catch(e){}
+        peer = null;
+    }
+    connections = {};
+    allRoomPeers.clear();
+    alivePlayers.clear();
+    remotePlayers = {};
+    isDead = false;
+    playerHealth = 100;
+    playerScore = 0;
+    
+    document.querySelectorAll('.menu-overlay').forEach(el => el.style.display = 'none');
+    document.getElementById('main-menu').style.display = 'flex';
+    document.getElementById('ui-layer').style.display = 'none';
+    document.getElementById('mobile-controls').style.display = 'none';
+    document.getElementById('sniper-scope').style.display = 'none';
+    document.getElementById('menu-status').innerText = '';
+    document.getElementById('join-code-input').value = '';
 }
 
 function handleConnOpen(conn) {
     if (isHost) {
         conn.send({ type: 'room_peers', peers: Array.from(allRoomPeers) });
         
-        // اگر هاست قبل از ورود بازیکن جدید بازی را شروع کرده باشد، بلافاصله سیگنال شروع فرستاده می‌شود
         if (isRunning) {
             conn.send({ type: 'start', mapSize: MAP_SIZE });
         }
         
-        // اطلاع به سایر بازیکنان در مورد ورود بازیکن جدید
         Object.values(connections).forEach(c => {
             if (c.open && c.peer !== conn.peer) {
                 c.send({ type: 'peer_joined', id: conn.peer });
@@ -707,6 +819,12 @@ function setupConnEvents(conn) {
         }
         else if (data.type === 'kill_confirmed') {
             if (isHost) {
+                alivePlayers.delete(data.victimId);
+                
+                if (alivePlayers.size <= 1 && isRunning) {
+                    setTimeout(() => { triggerRoundRestart(); }, 4000);
+                }
+
                 Object.values(connections).forEach(c => {
                     if (c.open && c.peer !== conn.peer) c.send(data);
                 });
@@ -719,8 +837,12 @@ function setupConnEvents(conn) {
                 let div = document.createElement('div'); div.className = 'killfeed-item'; div.innerText = `یک کیل گرفتید!`; document.getElementById('killfeed').appendChild(div); setTimeout(() => div.remove(), 4000);
             }
         }
+        else if (data.type === 'round_restart') {
+            applyRoundRestart();
+        }
         else if (data.type === 'player_leave') {
             allRoomPeers.delete(data.id);
+            alivePlayers.delete(data.id);
             if (activeVoiceCalls[data.id]) { try { activeVoiceCalls[data.id].close(); } catch(e){} delete activeVoiceCalls[data.id]; }
             if (remotePlayers[data.id]) {
                 scene.remove(remotePlayers[data.id].mesh);
@@ -735,6 +857,7 @@ function setupConnEvents(conn) {
 
     conn.on('close', () => { 
         allRoomPeers.delete(conn.peer);
+        alivePlayers.delete(conn.peer);
         delete connections[conn.peer];
         if (activeVoiceCalls[conn.peer]) { try { activeVoiceCalls[conn.peer].close(); } catch(e){} delete activeVoiceCalls[conn.peer]; }
         if (remotePlayers[conn.peer]) { scene.remove(remotePlayers[conn.peer].mesh); delete remotePlayers[conn.peer]; }
@@ -747,6 +870,38 @@ function setupConnEvents(conn) {
             document.getElementById('host-status').innerText = `بازیکنان متصل: ${Object.keys(connections).length + 1} / ۵۰`;
         }
     });
+}
+
+function triggerRoundRestart() {
+    if (!isHost) return;
+    let restartMsg = { type: 'round_restart' };
+    Object.values(connections).forEach(c => { if (c.open) c.send(restartMsg); });
+    applyRoundRestart();
+}
+
+function applyRoundRestart() {
+    isDead = false;
+    playerHealth = 100;
+    currentAmmo = maxAmmo;
+    document.getElementById('ammo-val').innerText = `${currentAmmo}/${maxAmmo}`;
+    document.getElementById('hp-val').innerText = '۱۰۰';
+    document.getElementById('game-over').style.display = 'none';
+
+    let pos = getValidSpawnPosition();
+    yawObject.position.set(pos.x, PLAYER_HEIGHT_STAND, pos.z);
+    pitchObject.rotation.x = 0; 
+
+    Object.values(remotePlayers).forEach(rp => {
+        rp.health = 100;
+        updateHealthBar(rp.hpData, 100);
+        if (!scene.children.includes(rp.mesh)) {
+            scene.add(rp.mesh);
+        }
+    });
+
+    if (isHost) {
+        alivePlayers = new Set(allRoomPeers);
+    }
 }
 
 function callPeerVoice(targetId) {
@@ -837,15 +992,24 @@ async function toggleVoiceChat() {
     }
 }
 
-function hostStartGame() { Object.values(connections).forEach(c => { if (c.open) c.send({ type: 'start', mapSize: MAP_SIZE }); }); startGame(MAP_SIZE); }
+function hostStartGame() { 
+    if (isHost) {
+        alivePlayers = new Set(allRoomPeers);
+    }
+    Object.values(connections).forEach(c => { if (c.open) c.send({ type: 'start', mapSize: MAP_SIZE }); }); 
+    startGame(MAP_SIZE); 
+}
 
 function startGame(size) {
     MAP_SIZE = size || MAP_SIZE;
     document.querySelectorAll('.menu-overlay').forEach(el => el.style.display = 'none');
     document.getElementById('ui-layer').style.display = 'block';
     if (isTouch) document.getElementById('mobile-controls').style.display = 'block';
-    initEngine(); let pos = getValidSpawnPosition(); yawObject.position.set(pos.x, PLAYER_HEIGHT_STAND, pos.z);
-    isRunning = true; document.getElementById('zoom-btn').style.display = 'flex';
+    initEngine(); 
+    let pos = getValidSpawnPosition(); 
+    yawObject.position.set(pos.x, PLAYER_HEIGHT_STAND, pos.z);
+    isRunning = true; 
+    document.getElementById('zoom-btn').style.display = 'flex';
     requestAnimationFrame(gameLoop);
 }
 
