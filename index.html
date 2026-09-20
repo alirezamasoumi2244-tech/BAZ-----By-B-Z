@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>شوتر آنلاین موبایل - B-Z GAMING </title>
+    <title>شوتر آنلاین موبایل - baz by B-Z</title>
     <style>
         * { box-sizing: border-box; user-select: none; -webkit-user-select: none; touch-action: none; }
         body, html {
@@ -634,7 +634,18 @@ function createRoom(isPublic) {
         tryClaimPublicId(1);
     } else {
         let privateId = Math.floor(1000 + Math.random() * 9000).toString();
-        initPeerHost(privateId, false);
+        peer = new Peer(privateId, peerConfig);
+        peer.on('open', id => {
+            initPeerHost(id, false);
+        });
+        peer.on('error', err => {
+            if (err.type === 'unavailable-id') {
+                peer.destroy();
+                createRoom(false); // تلاش مجدد برای تولید کد تصادفی دیگر در صورت تداخل
+            } else {
+                document.getElementById('menu-status').innerText = 'خطا در ساخت روم خصوصی';
+            }
+        });
     }
 }
 
@@ -743,6 +754,9 @@ function joinServer(targetId) {
             document.getElementById('client-wait-menu').style.display = 'flex';
             document.getElementById('connected-room-code').innerText = targetId;
         });
+        conn.on('error', () => {
+            document.getElementById('menu-status').innerText = 'خطا در اتصال به روم. کد را بررسی کنید.';
+        });
     });
     peer.on('call', handleVoiceCall);
 }
@@ -848,8 +862,7 @@ function setupConnEvents(conn) {
             }
         }
         else if (data.type === 'hit') {
-            // [ANTI-CHEAT]: اعتبارسنجی سرور/هاست روی دمیج دریافتی از کلاینت‌ها
-            let expectedMaxDmg = 100; // بیشترین دمیج ممکن (اسنایپر هدشات)
+            let expectedMaxDmg = 100;
             if (data.dmg > expectedMaxDmg || data.dmg <= 0) {
                 triggerAntiCheatBan("تلاش برای تزریق پکت دمیج نامعتبر (Damage Hack)");
                 return;
@@ -1112,14 +1125,11 @@ function fireWeapon() {
     if (isReloading || isDead || isBanned) return;
     const now = performance.now(), cfg = WEAPONS_CONFIG[currentWeapon];
 
-    // [ANTI-CHEAT 1]: بررسی نرخ شلیک (Rapid Fire & Macro Check)
-    // با در نظر گرفتن تلورانس بسیار کم ۵۰ میلی ثانیه برای پینگ شبکه
     if (now - lastFireTime < (cfg.fireRate - 50)) {
         triggerAntiCheatBan(`استفاده از چیت سرعت آتش غیرمجاز (Rapid Fire / Macro روی ${cfg.name})`);
         return;
     }
 
-    // [ANTI-CHEAT 2]: بررسی تعداد تیر خشاب (Infinite Ammo Check)
     if (currentAmmo <= 0) { 
         document.getElementById('reload-prompt').style.display = 'block'; 
         return; 
@@ -1146,8 +1156,6 @@ function fireWeapon() {
         let hitDist = intersects[0].distance;
         let effectiveRange = MAP_SIZE * cfg.maxRange;
 
-        // [ANTI-CHEAT 3]: بررسی دقیق برخورد با دیوار و شلیک از پشت مانع (Wallhack / Silent Aim Detector)
-        // اگر دیوار بین بازیکن و هدف قرار داشته باشد یا فاصله بیشتر از حد مجاز باشد
         if (wallIntersects.length > 0 && wallIntersects[0].distance < hitDist) {
             triggerAntiCheatBan("تلاش برای شلیک از پشت دیوار یا استفاده از چیت Silent Aim / Wallhack");
             return;
