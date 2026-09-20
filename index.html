@@ -364,7 +364,7 @@ const peerConfig = { config: { iceServers: [{ urls: 'stun:stun.l.google.com:1930
 
 const WEAPONS_CONFIG = {
     pistol: { name: 'کلت', fireRate: 350, auto: false, dmgBody: 10, dmgHead: 50, clipSize: 12, reloadTime: 1200, maxRange: 0.25 },
-    ak:     { name: 'AK رگباری', fireRate: 150, auto: true, dmgBody: 5, dmgHead: 35, clipSize: 30, reloadTime: 1800, maxRange: 1/6 },
+    ak:     { name: 'AK رگباری', fireRate: 100, auto: true, dmgBody: 5, dmgHead: 35, clipSize: 30, reloadTime: 1800, maxRange: 1/6 },
     sniper: { name: 'اسنایپر', fireRate: 800, auto: false, dmgBody: 50, dmgHead: 100, clipSize: 5, reloadTime: 2500, maxRange: 0.5 }
 };
 
@@ -877,6 +877,15 @@ function setupConnEvents(conn) {
                     let dt = (now - st.time) / 1000;
                     if (dt > 0.05) {
                         let dist = Math.hypot(data.x - st.x, data.z - st.z);
+                        
+                        // جلوگیری از خطای بن شدن هنگام اسپان یا ریسپان ناگهانی در مچ جدید
+                        if (dist > 50) {
+                            st.x = data.x;
+                            st.z = data.z;
+                            st.time = now;
+                            return;
+                        }
+
                         let maxAllowedDist = 65 * dt;
                         if (dist > maxAllowedDist && dt < 3.0) {
                             disconnectCheater(conn.peer, "تشخیص تقلب توسط هاست: حرکت غیرمجاز / Speed Hack");
@@ -1198,8 +1207,8 @@ function fireWeapon() {
     if (isReloading || isDead || isBanned) return;
     const now = performance.now(), cfg = WEAPONS_CONFIG[currentWeapon];
 
-    // محدودیت شلیک عادی: رعایت فاصله حداقل ۳۵۰ میلی‌ثانیه بدون بن شدن
-    if (now - lastFireTime < 350) {
+    // نرخ تیراندازی متناسب با اسلحه (برای AK دقیقاً هر 100 میلی‌ثانیه)
+    if (now - lastFireTime < cfg.fireRate) {
         return;
     }
 
