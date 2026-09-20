@@ -339,6 +339,7 @@ let connections = {}, scene, camera, renderer, yawObject, pitchObject;
 let isRunning = false, playerHealth = 100, playerScore = 0;
 let walls = [], wallMeshes = [], remotePlayers = {}, isDead = false;
 let lastDamageTime = 0;
+let hostPlayerStates = {}; // ردیابی وضعیت بازیکنان روی هاست برای تشخیص دقیق خطا/چیت
 
 let playerVelocityY = 0, isGrounded = true, isCrouched = false;
 const gravity = -30, PLAYER_SPEED_WALK = 27;
@@ -366,6 +367,39 @@ const WEAPONS_CONFIG = {
     ak:     { name: 'AK رگباری', fireRate: 150, auto: true, dmgBody: 5, dmgHead: 35, clipSize: 30, reloadTime: 1800, maxRange: 1/6 },
     sniper: { name: 'اسنایپر', fireRate: 800, auto: false, dmgBody: 50, dmgHead: 100, clipSize: 5, reloadTime: 2500, maxRange: 0.5 }
 };
+
+// تابع دیسکانکت و اخراج بازیکن خطادار توسط هاست
+function disconnectCheater(peerId, reason) {
+    if (!isHost) return;
+    if (connections[peerId]) {
+        if (connections[peerId].open) {
+            try { connections[peerId].send({ type: 'banned', reason: reason }); } catch(e){}
+        }
+        try { connections[peerId].close(); } catch(e){}
+        delete connections[peerId];
+    }
+    allRoomPeers.delete(peerId);
+    alivePlayers.delete(peerId);
+    delete hostPlayerStates[peerId];
+    if (remotePlayers[peerId]) {
+        scene.remove(remotePlayers[peerId].mesh);
+        delete remotePlayers[peerId];
+    }
+    if (remoteAudioElements[peerId]) {
+        remoteAudioElements[peerId].remove();
+        delete remoteAudioElements[peerId];
+    }
+    document.getElementById('host-status').innerText = `بازیکنان متصل: ${Object.keys(connections).length + 1} / ۵۰`;
+
+    Object.values(connections).forEach(c => {
+        if (c.open) c.send({ type: 'player_leave', id: peerId });
+    });
+
+    // بررسی وضعیت پایان راند در صورتی که با دیسکانکت شدن بازیکن تعداد زنده‌ها تغییر کند
+    if (alivePlayers.size <= 1 && isRunning) {
+        setTimeout(() => { triggerRoundRestart(); }, 1000);
+    }
+}
 
 function getValidSpawnPosition() {
     const testBox = new THREE.Box3();
@@ -628,6 +662,7 @@ function setGraphicsQuality(q) {
 function createRoom(isPublic) {
     if (isBanned) return;
     isHost = true; 
+    hostPlayerStates = {};
     document.getElementById('menu-status').innerText = 'در حال ساخت روم...';
     
     if (isPublic) {
@@ -641,7 +676,7 @@ function createRoom(isPublic) {
         peer.on('error', err => {
             if (err.type === 'unavailable-id') {
                 peer.destroy();
-                createRoom(false); // تلاش مجدد برای تولید کد تصادفی دیگر در صورت تداخل
+                createRoom(false);
             } else {
                 document.getElementById('menu-status').innerText = 'خطا در ساخت روم خصوصی';
             }
@@ -768,6 +803,7 @@ function leaveRoom() {
         peer = null;
     }
     connections = {};
+    hostPlayerStates = {};
     allRoomPeers.clear();
     alivePlayers.clear();
     remotePlayers = {};
@@ -813,7 +849,10 @@ function setupConnEvents(conn) {
     conn.on('data', data => {
         if (isBanned) return;
 
-        if (data.type === 'start') startGame(data.mapSize);
+        if (data.type === 'banned') {
+            triggerAntiCheatBan(data.reason || "توسط سرور/میزبان به دلیل تقلب یا خطا دیسکانکت شدید.");
+        }
+        else if (data.type === 'start') startGame(data.mapSize);
         else if (data.type === 'room_peers') {
             data.peers.forEach(id => allRoomPeers.add(id));
             allRoomPeers.add(myId);
@@ -831,6 +870,26 @@ function setupConnEvents(conn) {
             let targetId = data.id || conn.peer;
             
             if (isHost) {
+                // محاسبه دقیق توسط هاست برای تشخیص خطا یا سرعت غیرمجاز (Speed/Teleport Check)
+                if (!hostPlayerStates[targetId]) {
+                    hostPlayerStates[targetId] = { x: data.x, z: data.z, time: performance.now() };
+                } else {
+                    let st = hostPlayerStates[targetId];
+                    let now = performance.now();
+                    let dt = (now - st.time) / 1000;
+                    if (dt > 0.05) {
+                        let dist = Math.hypot(data.x - st.x, data.z - st.z);
+                        let maxAllowedDist = 65 * dt; // آستانه مجاز با ضریب ایمنی
+                        if (dist > maxAllowedDist && dt < 3.0) {
+                            disconnectCheater(conn.peer, "تشخیص تقلب توسط هاست: حرکت غیرمجاز / Speed Hack");
+                            return;
+                        }
+                        st.x = data.x;
+                        st.z = data.z;
+                        st.time = now;
+                    }
+                }
+
                 Object.values(connections).forEach(c => {
                     if (c.open && c.peer !== targetId) c.send(data);
                 });
@@ -864,7 +923,11 @@ function setupConnEvents(conn) {
         else if (data.type === 'hit') {
             let expectedMaxDmg = 100;
             if (data.dmg > expectedMaxDmg || data.dmg <= 0) {
-                triggerAntiCheatBan("تلاش برای تزریق پکت دمیج نامعتبر (Damage Hack)");
+                if (isHost) {
+                    disconnectCheater(conn.peer, "تزریق پکت دمیج نامعتبر (Damage Hack)");
+                } else {
+                    triggerAntiCheatBan("تلاش برای تزریق پکت دمیج نامعتبر (Damage Hack)");
+                }
                 return;
             }
 
@@ -886,6 +949,12 @@ function setupConnEvents(conn) {
                     isDead = true; 
                     document.getElementById('game-over').style.display = 'flex'; 
                     let deathMsg = { type: 'kill_confirmed', killerId: data.attackerId, victimId: myId };
+                    if (isHost) {
+                        alivePlayers.delete(myId);
+                        if (alivePlayers.size <= 1 && isRunning) {
+                            setTimeout(() => { triggerRoundRestart(); }, 1500);
+                        }
+                    }
                     Object.values(connections).forEach(c => { if(c.open) c.send(deathMsg); }); 
                 }
             }
@@ -916,6 +985,7 @@ function setupConnEvents(conn) {
         else if (data.type === 'player_leave') {
             allRoomPeers.delete(data.id);
             alivePlayers.delete(data.id);
+            delete hostPlayerStates[data.id];
             if (activeVoiceCalls[data.id]) { try { activeVoiceCalls[data.id].close(); } catch(e){} delete activeVoiceCalls[data.id]; }
             if (remotePlayers[data.id]) {
                 scene.remove(remotePlayers[data.id].mesh);
@@ -931,6 +1001,7 @@ function setupConnEvents(conn) {
     conn.on('close', () => { 
         allRoomPeers.delete(conn.peer);
         alivePlayers.delete(conn.peer);
+        delete hostPlayerStates[conn.peer];
         delete connections[conn.peer];
         if (activeVoiceCalls[conn.peer]) { try { activeVoiceCalls[conn.peer].close(); } catch(e){} delete activeVoiceCalls[conn.peer]; }
         if (remotePlayers[conn.peer]) { scene.remove(remotePlayers[conn.peer].mesh); delete remotePlayers[conn.peer]; }
@@ -941,6 +1012,10 @@ function setupConnEvents(conn) {
                 if (c.open && c.peer !== conn.peer) c.send({ type: 'player_leave', id: conn.peer });
             });
             document.getElementById('host-status').innerText = `بازیکنان متصل: ${Object.keys(connections).length + 1} / ۵۰`;
+
+            if (alivePlayers.size <= 1 && isRunning) {
+                setTimeout(() => { triggerRoundRestart(); }, 1500);
+            }
         }
     });
 }
@@ -956,12 +1031,12 @@ function triggerRoundRestart() {
 }
 
 function applyRoundRestart(winnerId) {
-    let winnerText = (winnerId === myId) ? 'شما برنده این راند شدید! 🏆' : (winnerId ? 'راند تمام شد! برنده مشخص شد.' : 'راند مساوی شد!');
+    let winnerText = (winnerId === myId) ? 'شما برنده این راند شدید! 🏆' : (winnerId ? 'راند تمام شد! برنده معرفی شد.' : 'راند مساوی شد!');
     
     let gameOverTitle = document.getElementById('game-over-title');
     let gameOverDesc = document.getElementById('game-over-desc');
     if (gameOverTitle) gameOverTitle.innerText = winnerText;
-    if (gameOverDesc) gameOverDesc.innerText = 'راند جدید تا لحظاتی دیگر شروع می‌شود...';
+    if (gameOverDesc) gameOverDesc.innerText = 'راند جدید شروع شد! همه بازیکنان وارد مچ جدید شدند...';
     document.getElementById('game-over').style.display = 'flex';
 
     setTimeout(() => {
